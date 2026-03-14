@@ -1,0 +1,1232 @@
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/url"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"time"
+)
+
+// ═══════════════════════════════════
+// Docker config (JSON file)
+// ═══════════════════════════════════
+
+const dockerConfigFile = "/var/lib/nimbusos/config/docker.json"
+
+func getDockerConfigGo() map[string]interface{} {
+	data, err := os.ReadFile(dockerConfigFile)
+	if err != nil {
+		return map[string]interface{}{"installed": false, "path": nil, "permissions": []interface{}{}, "appPermissions": map[string]interface{}{}, "installedAt": nil, "containers": []interface{}{}}
+	}
+	var conf map[string]interface{}
+	if json.Unmarshal(data, &conf) != nil {
+		return map[string]interface{}{"installed": false, "path": nil, "permissions": []interface{}{}, "appPermissions": map[string]interface{}{}}
+	}
+	if conf["appPermissions"] == nil {
+		conf["appPermissions"] = map[string]interface{}{}
+	}
+	if conf["permissions"] == nil {
+		conf["permissions"] = []interface{}{}
+	}
+	return conf
+}
+
+func saveDockerConfigGo(config map[string]interface{}) {
+	data, _ := json.MarshalIndent(config, "", "  ")
+	os.WriteFile(dockerConfigFile, data, 0644)
+}
+
+func isDockerInstalledGo() bool {
+	_, ok := run("docker --version 2>/dev/null")
+	return ok
+}
+
+func getRealContainersGo() []map[string]interface{} {
+	out, ok := run(`docker ps -a --format "{{.ID}}|{{.Names}}|{{.Image}}|{{.Status}}|{{.Ports}}|{{.State}}" 2>/dev/null`)
+	if !ok || out == "" {
+		return []map[string]interface{}{}
+	}
+	var containers []map[string]interface{}
+	for _, line := range strings.Split(out, "\n") {
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "|", 6)
+		if len(parts) < 6 {
+			continue
+		}
+		ports := "—"
+		if parts[4] != "" {
+			ports = parts[4]
+		}
+		containers = append(containers, map[string]interface{}{
+			"id": parts[0], "name": parts[1], "image": parts[2],
+			"status": parts[3], "ports": ports, "state": parts[5],
+		})
+	}
+	if containers == nil {
+		return []map[string]interface{}{}
+	}
+	return containers
+}
+
+func sanitizeDockerNameGo(name string) string {
+	if name == "" {
+		return ""
+	}
+	re := regexp.MustCompile(`[^a-zA-Z0-9_.\-/:]+`)
+	sanitized := re.ReplaceAllString(name, "")
+	if sanitized == "" || len(sanitized) > 256 || strings.Contains(sanitized, "..") {
+		return ""
+	}
+	return sanitized
+}
+
+func hasDockerPermission(session map[string]interface{}) bool {
+	if role, _ := session["role"].(string); role == "admin" {
+		return true
+	}
+	username, _ := session["username"].(string)
+	conf := getDockerConfigGo()
+	perms, _ := conf["permissions"].([]interface{})
+	for _, p := range perms {
+		if ps, _ := p.(string); ps == username {
+			return true
+		}
+	}
+	return false
+}
+
+// ═══════════════════════════════════
+// Known app metadata
+// ═══════════════════════════════════
+
+var knownDockerApps = map[string][3]string{
+	"jellyfin":       {"Jellyfin", "🎞️", "#00A4DC"},
+	"plex":           {"Plex", "🎬", "#E5A00D"},
+	"nextcloud":      {"Nextcloud", "☁️", "#0082C9"},
+	"immich":         {"Immich", "📸", "#4250AF"},
+	"syncthing":      {"Syncthing", "🔄", "#0891B2"},
+	"transmission":   {"Transmission", "⬇️", "#B50D0D"},
+	"qbittorrent":    {"qBittorrent", "📥", "#2F67BA"},
+	"homeassistant":  {"Home Assistant", "🏠", "#18BCF2"},
+	"home-assistant": {"Home Assistant", "🏠", "#18BCF2"},
+	"vaultwarden":    {"Vaultwarden", "🔐", "#175DDC"},
+	"portainer":      {"Portainer", "📊", "#13BEF9"},
+	"gitea":          {"Gitea", "🦊", "#609926"},
+	"pihole":         {"Pi-hole", "🛡️", "#96060C"},
+	"adguard":        {"AdGuard Home", "🛡️", "#68BC71"},
+	"nginx":          {"Nginx", "🌐", "#009639"},
+	"mariadb":        {"MariaDB", "🗄️", "#003545"},
+	"postgres":       {"PostgreSQL", "🐘", "#336791"},
+	"redis":          {"Redis", "🔴", "#DC382D"},
+	"grafana":        {"Grafana", "📈", "#F46800"},
+	"sonarr":         {"Sonarr", "📺", "#35C5F4"},
+	"radarr":         {"Radarr", "🎥", "#FFC230"},
+}
+
+func getAppMeta(image, containerName string) (string, string, string) {
+	lower := strings.ToLower(containerName)
+	for key, meta := range knownDockerApps {
+		if strings.Contains(lower, key) {
+			return meta[0], meta[1], meta[2]
+		}
+	}
+	lower = strings.ToLower(image)
+	for key, meta := range knownDockerApps {
+		if strings.Contains(lower, key) {
+			return meta[0], meta[1], meta[2]
+		}
+	}
+	return containerName, "📦", "#78706A"
+}
+
+// ═══════════════════════════════════
+// Docker HTTP handlers
+// ═══════════════════════════════════
+
+func handleDockerRoutes(w http.ResponseWriter, r *http.Request) {
+	urlPath := r.URL.Path
+	method := r.Method
+
+	switch {
+	case urlPath == "/api/docker/status" && method == "GET":
+		dockerStatus(w, r)
+	case urlPath == "/api/docker/permissions" && method == "GET":
+		dockerPermissionsGet(w, r)
+	case urlPath == "/api/docker/permissions" && method == "PUT":
+		dockerPermissionsSet(w, r)
+	case urlPath == "/api/docker/app-permissions" && method == "GET":
+		dockerAppPermissions(w, r)
+	case urlPath == "/api/docker/containers" && method == "GET":
+		dockerContainersList(w, r)
+	case urlPath == "/api/docker/installed-apps" && method == "GET":
+		dockerInstalledApps(w, r)
+	case urlPath == "/api/docker/install" && method == "POST":
+		dockerInstall(w, r)
+	case urlPath == "/api/docker/uninstall" && method == "POST":
+		dockerUninstall(w, r)
+	case urlPath == "/api/docker/uninstall" && method == "DELETE":
+		dockerUninstallConfig(w, r)
+	case urlPath == "/api/docker/container" && method == "POST":
+		dockerContainerCreate(w, r)
+	case urlPath == "/api/docker/stack" && method == "POST":
+		dockerStackDeploy(w, r)
+	case urlPath == "/api/permissions/matrix" && method == "GET":
+		permissionsMatrix(w, r)
+	case urlPath == "/api/firewall/add-rule" && method == "POST":
+		firewallAddRule(w, r)
+	case urlPath == "/api/firewall/remove-rule" && method == "POST":
+		firewallRemoveRule(w, r)
+	case urlPath == "/api/firewall/toggle" && method == "POST":
+		firewallToggle(w, r)
+	case urlPath == "/api/hardware/install-driver" && method == "POST":
+		hardwareInstallDriver(w, r)
+	case strings.HasPrefix(urlPath, "/api/hardware/driver-log/") && method == "GET":
+		hardwareDriverLog(w, r)
+	default:
+		// Regex routes
+		if handleDockerRegexRoutes(w, r) {
+			return
+		}
+		jsonError(w, 404, "Not found")
+	}
+}
+
+func handleDockerRegexRoutes(w http.ResponseWriter, r *http.Request) bool {
+	urlPath := r.URL.Path
+	method := r.Method
+
+	// PUT /api/docker/app-permissions/:appId
+	reAppPerm := regexp.MustCompile(`^/api/docker/app-permissions/([a-zA-Z0-9_-]+)$`)
+	if m := reAppPerm.FindStringSubmatch(urlPath); m != nil && method == "PUT" {
+		dockerAppPermUpdate(w, r, m[1])
+		return true
+	}
+
+	// GET /api/docker/app-access/:appId
+	reAppAccess := regexp.MustCompile(`^/api/docker/app-access/([a-zA-Z0-9_-]+)$`)
+	if m := reAppAccess.FindStringSubmatch(urlPath); m != nil && method == "GET" {
+		dockerAppAccess(w, r, m[1])
+		return true
+	}
+
+	// GET /api/docker/app-folders/:appId
+	reAppFolders := regexp.MustCompile(`^/api/docker/app-folders/([a-zA-Z0-9_-]+)$`)
+	if m := reAppFolders.FindStringSubmatch(urlPath); m != nil && method == "GET" {
+		dockerAppFolders(w, r, m[1])
+		return true
+	}
+
+	// POST /api/docker/container/:id/:action
+	reAction := regexp.MustCompile(`^/api/docker/container/([a-zA-Z0-9_.-]+)/(start|stop|restart)$`)
+	if m := reAction.FindStringSubmatch(urlPath); m != nil && method == "POST" {
+		dockerContainerAction(w, r, m[1], m[2])
+		return true
+	}
+
+	// DELETE /api/docker/container/:id
+	reDelete := regexp.MustCompile(`^/api/docker/container/([a-zA-Z0-9_.-]+)$`)
+	if m := reDelete.FindStringSubmatch(urlPath); m != nil && method == "DELETE" {
+		dockerContainerDelete(w, r, m[1])
+		return true
+	}
+
+	// GET /api/docker/container/:id/mounts
+	reMounts := regexp.MustCompile(`^/api/docker/container/([a-zA-Z0-9_-]+)/mounts$`)
+	if m := reMounts.FindStringSubmatch(urlPath); m != nil && method == "GET" {
+		dockerContainerMounts(w, r, m[1])
+		return true
+	}
+
+	// POST /api/docker/container/:id/rebuild
+	reRebuild := regexp.MustCompile(`^/api/docker/container/([a-zA-Z0-9_-]+)/rebuild$`)
+	if m := reRebuild.FindStringSubmatch(urlPath); m != nil && method == "POST" {
+		dockerContainerRebuild(w, r, m[1])
+		return true
+	}
+
+	// DELETE /api/docker/stack/:id
+	reStack := regexp.MustCompile(`^/api/docker/stack/([a-zA-Z0-9_-]+)$`)
+	if m := reStack.FindStringSubmatch(urlPath); m != nil && method == "DELETE" {
+		dockerStackDelete(w, r, m[1])
+		return true
+	}
+
+	// GET /api/docker/pull/:image
+	if strings.HasPrefix(urlPath, "/api/docker/pull/") && method == "GET" {
+		dockerPull(w, r)
+		return true
+	}
+
+	return false
+}
+
+// ═══════════════════════════════════
+// Handlers
+// ═══════════════════════════════════
+
+func dockerStatus(w http.ResponseWriter, r *http.Request) {
+	session := requireAuth(w, r)
+	if session == nil {
+		return
+	}
+	conf := getDockerConfigGo()
+	hasPerm := hasDockerPermission(session)
+	dockerRunning := isDockerInstalledGo()
+
+	if dockerRunning && conf["installed"] != true {
+		conf["installed"] = true
+		conf["installedAt"] = time.Now().UTC().Format(time.RFC3339)
+		saveDockerConfigGo(conf)
+	}
+
+	var containers []map[string]interface{}
+	if dockerRunning && hasPerm {
+		containers = getRealContainersGo()
+	} else {
+		containers = []map[string]interface{}{}
+	}
+
+	jsonOk(w, map[string]interface{}{
+		"installed":     conf["installed"],
+		"path":          conf["path"],
+		"hasPermission": hasPerm,
+		"installedAt":   conf["installedAt"],
+		"containers":    containers,
+		"dockerRunning": dockerRunning,
+	})
+}
+
+func dockerPermissionsGet(w http.ResponseWriter, r *http.Request) {
+	session := requireAdmin(w, r)
+	if session == nil {
+		return
+	}
+	conf := getDockerConfigGo()
+	users, _ := dbUsersList()
+	perms, _ := conf["permissions"].([]interface{})
+
+	var userList []map[string]interface{}
+	for _, u := range users {
+		username, _ := u["username"].(string)
+		role, _ := u["role"].(string)
+		hasAccess := role == "admin"
+		if !hasAccess {
+			for _, p := range perms {
+				if ps, _ := p.(string); ps == username {
+					hasAccess = true
+					break
+				}
+			}
+		}
+		userList = append(userList, map[string]interface{}{
+			"username": username, "role": role, "hasAccess": hasAccess,
+		})
+	}
+	jsonOk(w, map[string]interface{}{"users": userList, "permissions": perms})
+}
+
+func dockerPermissionsSet(w http.ResponseWriter, r *http.Request) {
+	session := requireAdmin(w, r)
+	if session == nil {
+		return
+	}
+	body, _ := readBody(r)
+	permsRaw, ok := body["permissions"].([]interface{})
+	if !ok {
+		jsonError(w, 400, "Invalid permissions format")
+		return
+	}
+	conf := getDockerConfigGo()
+	conf["permissions"] = permsRaw
+	saveDockerConfigGo(conf)
+	jsonOk(w, map[string]interface{}{"ok": true, "permissions": permsRaw})
+}
+
+func dockerAppPermissions(w http.ResponseWriter, r *http.Request) {
+	session := requireAdmin(w, r)
+	if session == nil {
+		return
+	}
+	conf := getDockerConfigGo()
+	users, _ := dbUsersList()
+	shares, _ := dbSharesList()
+
+	var installedApps []map[string]interface{}
+	containers := getRealContainersGo()
+	for _, c := range containers {
+		installedApps = append(installedApps, map[string]interface{}{"id": c["name"], "name": c["name"], "type": "container", "image": c["image"]})
+	}
+
+	// Check stacks
+	dockerPath, _ := conf["path"].(string)
+	if dockerPath == "" {
+		dockerPath = "/var/lib/docker"
+	}
+	stacksPath := filepath.Join(dockerPath, "stacks")
+	if entries, err := os.ReadDir(stacksPath); err == nil {
+		for _, e := range entries {
+			if _, err := os.Stat(filepath.Join(stacksPath, e.Name(), "docker-compose.yml")); err == nil {
+				installedApps = append(installedApps, map[string]interface{}{"id": e.Name(), "name": e.Name(), "type": "stack"})
+			}
+		}
+	}
+
+	var userList []map[string]interface{}
+	for _, u := range users {
+		userList = append(userList, map[string]interface{}{"username": u["username"], "role": u["role"]})
+	}
+
+	var shareList []map[string]interface{}
+	for _, s := range shares {
+		shareList = append(shareList, map[string]interface{}{"name": s["name"], "displayName": s["displayName"], "permissions": s["permissions"]})
+	}
+
+	jsonOk(w, map[string]interface{}{
+		"users":             userList,
+		"apps":              installedApps,
+		"shares":            shareList,
+		"appPermissions":    conf["appPermissions"],
+		"dockerPermissions": conf["permissions"],
+	})
+}
+
+func dockerAppPermUpdate(w http.ResponseWriter, r *http.Request, appId string) {
+	session := requireAdmin(w, r)
+	if session == nil {
+		return
+	}
+	body, _ := readBody(r)
+	allowedUsers, ok := body["users"].([]interface{})
+	if !ok {
+		jsonError(w, 400, "Invalid format")
+		return
+	}
+	conf := getDockerConfigGo()
+	appPerms, _ := conf["appPermissions"].(map[string]interface{})
+	if appPerms == nil {
+		appPerms = map[string]interface{}{}
+	}
+	appPerms[appId] = allowedUsers
+	conf["appPermissions"] = appPerms
+	saveDockerConfigGo(conf)
+	jsonOk(w, map[string]interface{}{"ok": true, "appId": appId, "users": allowedUsers})
+}
+
+func dockerAppAccess(w http.ResponseWriter, r *http.Request, appId string) {
+	session := requireAuth(w, r)
+	if session == nil {
+		return
+	}
+	if role, _ := session["role"].(string); role == "admin" {
+		jsonOk(w, map[string]interface{}{"hasAccess": true, "appId": appId})
+		return
+	}
+	conf := getDockerConfigGo()
+	appPerms, _ := conf["appPermissions"].(map[string]interface{})
+	users, _ := appPerms[appId].([]interface{})
+	username, _ := session["username"].(string)
+	hasAccess := false
+	for _, u := range users {
+		if us, _ := u.(string); us == username {
+			hasAccess = true
+			break
+		}
+	}
+	jsonOk(w, map[string]interface{}{"hasAccess": hasAccess, "appId": appId})
+}
+
+func dockerAppFolders(w http.ResponseWriter, r *http.Request, appId string) {
+	session := requireAuth(w, r)
+	if session == nil {
+		return
+	}
+	shares, _ := dbSharesList()
+	var folders []map[string]interface{}
+	for _, s := range shares {
+		appPerms, _ := s["appPermissions"].([]map[string]interface{})
+		for _, ap := range appPerms {
+			if aid, _ := ap["appId"].(string); aid == appId {
+				folders = append(folders, map[string]interface{}{"name": s["name"], "displayName": s["displayName"], "path": s["path"]})
+				break
+			}
+		}
+	}
+	if folders == nil {
+		folders = []map[string]interface{}{}
+	}
+	jsonOk(w, map[string]interface{}{"appId": appId, "folders": folders})
+}
+
+func dockerContainersList(w http.ResponseWriter, r *http.Request) {
+	session := requireAuth(w, r)
+	if session == nil {
+		return
+	}
+	if !isDockerInstalledGo() {
+		jsonOk(w, map[string]interface{}{"installed": false, "containers": []interface{}{}})
+		return
+	}
+	if !hasDockerPermission(session) {
+		jsonError(w, 403, "No permission to manage Docker")
+		return
+	}
+	jsonOk(w, map[string]interface{}{"installed": true, "containers": getRealContainersGo()})
+}
+
+func dockerInstalledApps(w http.ResponseWriter, r *http.Request) {
+	session := requireAuth(w, r)
+	if session == nil {
+		return
+	}
+	if !isDockerInstalledGo() {
+		jsonOk(w, map[string]interface{}{"apps": []interface{}{}})
+		return
+	}
+
+	registeredApps := getInstalledApps()
+
+	// Get running containers
+	out, _ := run(`docker ps --format '{{.Names}}|{{.Image}}|{{.Ports}}|{{.Status}}' 2>/dev/null`)
+	runningContainers := map[string]map[string]interface{}{}
+	if out != "" {
+		for _, line := range strings.Split(out, "\n") {
+			parts := strings.SplitN(line, "|", 4)
+			if len(parts) < 4 {
+				continue
+			}
+			var port interface{}
+			if parts[2] != "" {
+				re := regexp.MustCompile(`0\.0\.0\.0:(\d+)`)
+				if m := re.FindStringSubmatch(parts[2]); m != nil {
+					port = parseIntDefault(m[1], 0)
+				}
+			}
+			status := "stopped"
+			if strings.Contains(parts[3], "Up") {
+				status = "running"
+			}
+			runningContainers[parts[0]] = map[string]interface{}{"image": parts[1], "port": port, "status": status}
+		}
+	}
+
+	var apps []interface{}
+	addedIds := map[string]bool{}
+
+	for _, reg := range registeredApps {
+		regId, _ := reg["id"].(string)
+		regType, _ := reg["type"].(string)
+		isStack := regType == "stack"
+
+		containerStatus := "unknown"
+		if isStack {
+			for _, suffix := range []string{"_server", "-server", "_app", "-app", ""} {
+				if c, ok := runningContainers[regId+suffix]; ok {
+					containerStatus, _ = c["status"].(string)
+					break
+				}
+			}
+			if containerStatus == "unknown" {
+				for name, c := range runningContainers {
+					if strings.HasPrefix(name, regId+"_") || strings.HasPrefix(name, regId+"-") {
+						containerStatus, _ = c["status"].(string)
+						break
+					}
+				}
+			}
+		} else {
+			if c, ok := runningContainers[regId]; ok {
+				containerStatus, _ = c["status"].(string)
+			}
+		}
+
+		apps = append(apps, map[string]interface{}{
+			"id": regId, "name": reg["name"], "icon": reg["icon"],
+			"color": reg["color"], "port": reg["port"], "image": reg["image"],
+			"status": containerStatus, "category": "installed", "isStack": isStack,
+			"external": reg["external"],
+		})
+		addedIds[regId] = true
+	}
+
+	// Add unregistered containers with ports
+	for name, c := range runningContainers {
+		if addedIds[name] || c["port"] == nil {
+			continue
+		}
+		// Skip stack sub-containers
+		skip := false
+		for _, sub := range []string{"_redis", "_postgres", "_ml"} {
+			if strings.Contains(name, sub) {
+				skip = true
+				break
+			}
+		}
+		if skip {
+			continue
+		}
+		for id := range addedIds {
+			if strings.HasPrefix(name, id+"_") || strings.HasPrefix(name, id+"-") {
+				skip = true
+				break
+			}
+		}
+		if skip {
+			continue
+		}
+
+		dispName, icon, color := getAppMeta(c["image"].(string), name)
+		apps = append(apps, map[string]interface{}{
+			"id": name, "name": dispName, "icon": icon, "color": color,
+			"port": c["port"], "image": c["image"], "status": c["status"], "category": "installed",
+		})
+	}
+
+	if apps == nil {
+		apps = []interface{}{}
+	}
+	jsonOk(w, map[string]interface{}{"apps": apps})
+}
+
+func dockerInstall(w http.ResponseWriter, r *http.Request) {
+	session := requireAdmin(w, r)
+	if session == nil {
+		return
+	}
+	body, _ := readBody(r)
+
+	storageConf := getStorageConfigFull()
+	confPools, _ := storageConf["pools"].([]interface{})
+	if len(confPools) == 0 {
+		jsonError(w, 400, "No storage pools available. Create a pool in Storage Manager first.")
+		return
+	}
+
+	poolName := bodyStr(body, "pool")
+	primaryPool, _ := storageConf["primaryPool"].(string)
+	var targetPool map[string]interface{}
+	for _, p := range confPools {
+		pm, _ := p.(map[string]interface{})
+		name, _ := pm["name"].(string)
+		if poolName != "" && name == poolName {
+			targetPool = pm
+			break
+		}
+		if name == primaryPool {
+			targetPool = pm
+		}
+	}
+	if targetPool == nil {
+		pm, _ := confPools[0].(map[string]interface{})
+		targetPool = pm
+	}
+
+	mountPoint, _ := targetPool["mountPoint"].(string)
+	dockerPath := bodyStr(body, "path")
+	if dockerPath == "" || !strings.HasPrefix(dockerPath, "/") {
+		dockerPath = filepath.Join(mountPoint, "docker")
+	}
+
+	os.MkdirAll(filepath.Join(dockerPath, "containers"), 0755)
+	os.MkdirAll(filepath.Join(dockerPath, "volumes"), 0755)
+	os.MkdirAll(filepath.Join(dockerPath, "stacks"), 0755)
+
+	dockerAvailable := isDockerInstalledGo()
+	if !dockerAvailable {
+		cmd := exec.Command("bash", "-c", "curl -fsSL https://get.docker.com | sh")
+		if err := cmd.Run(); err == nil {
+			run("usermod -aG docker nimbus 2>/dev/null || true")
+			dockerAvailable = true
+		}
+	}
+
+	if dockerAvailable {
+		dockerDataPath := filepath.Join(dockerPath, "data")
+		os.MkdirAll(dockerDataPath, 0755)
+		os.MkdirAll("/etc/docker", 0755)
+		daemonConf := map[string]interface{}{"data-root": dockerDataPath}
+		data, _ := json.MarshalIndent(daemonConf, "", "  ")
+		os.WriteFile("/etc/docker/daemon.json", data, 0644)
+		run("systemctl enable docker 2>/dev/null")
+		run("systemctl restart docker 2>/dev/null")
+	}
+
+	conf := getDockerConfigGo()
+	conf["installed"] = true
+	conf["dockerAvailable"] = dockerAvailable
+	conf["path"] = dockerPath
+	if perms, ok := body["permissions"].([]interface{}); ok {
+		conf["permissions"] = perms
+	}
+	conf["installedAt"] = time.Now().UTC().Format(time.RFC3339)
+	saveDockerConfigGo(conf)
+
+	jsonOk(w, map[string]interface{}{"ok": true, "path": dockerPath, "dockerAvailable": dockerAvailable})
+}
+
+func dockerUninstall(w http.ResponseWriter, r *http.Request) {
+	session := requireAdmin(w, r)
+	if session == nil {
+		return
+	}
+	run("docker stop $(docker ps -aq) 2>/dev/null || true")
+	run("docker rm $(docker ps -aq) 2>/dev/null || true")
+	run("systemctl stop docker 2>/dev/null || true")
+	run("systemctl disable docker 2>/dev/null || true")
+	run("apt-get purge -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin 2>/dev/null || true")
+	run("rm -f /etc/docker/daemon.json 2>/dev/null || true")
+
+	conf := getDockerConfigGo()
+	conf["installed"] = false
+	conf["dockerAvailable"] = false
+	conf["path"] = nil
+	conf["permissions"] = []interface{}{}
+	conf["installedAt"] = nil
+	saveDockerConfigGo(conf)
+	jsonOk(w, map[string]interface{}{"ok": true})
+}
+
+func dockerUninstallConfig(w http.ResponseWriter, r *http.Request) {
+	session := requireAdmin(w, r)
+	if session == nil {
+		return
+	}
+	conf := getDockerConfigGo()
+	conf["installed"] = false
+	conf["path"] = nil
+	conf["permissions"] = []interface{}{}
+	conf["installedAt"] = nil
+	saveDockerConfigGo(conf)
+	jsonOk(w, map[string]interface{}{"ok": true})
+}
+
+func dockerContainerCreate(w http.ResponseWriter, r *http.Request) {
+	session := requireAuth(w, r)
+	if session == nil {
+		return
+	}
+	if !hasDockerPermission(session) {
+		jsonError(w, 403, "No permission to manage Docker")
+		return
+	}
+	if !isDockerInstalledGo() {
+		jsonError(w, 400, "Docker not installed")
+		return
+	}
+
+	body, _ := readBody(r)
+	id := sanitizeDockerNameGo(bodyStr(body, "id"))
+	name := sanitizeDockerNameGo(bodyStr(body, "name"))
+	image := sanitizeDockerNameGo(bodyStr(body, "image"))
+	if id == "" || name == "" || image == "" {
+		jsonError(w, 400, "Missing container info")
+		return
+	}
+
+	conf := getDockerConfigGo()
+	dockerPath, _ := conf["path"].(string)
+	if dockerPath == "" {
+		dockerPath = "/var/lib/docker"
+	}
+
+	cmd := fmt.Sprintf("docker run -d --name %s --restart unless-stopped", id)
+
+	// Ports
+	if ports, ok := body["ports"].(map[string]interface{}); ok {
+		for host, container := range ports {
+			cmd += fmt.Sprintf(" -p %s:%s", host, fmt.Sprintf("%v", container))
+		}
+	}
+
+	// Config volume
+	containerDataPath := filepath.Join(dockerPath, "containers", id)
+	os.MkdirAll(containerDataPath, 0755)
+	cmd += fmt.Sprintf(" -v %s:/config", containerDataPath)
+
+	// Shared folder mounts
+	shares, _ := dbSharesList()
+	var mountedShares []string
+	for _, s := range shares {
+		appPerms, _ := s["appPermissions"].([]map[string]interface{})
+		for _, ap := range appPerms {
+			if aid, _ := ap["appId"].(string); aid == id {
+				sharePath, _ := s["path"].(string)
+				shareName, _ := s["name"].(string)
+				if sharePath != "" {
+					cmd += fmt.Sprintf(` -v "%s":"/media/%s":ro`, sharePath, shareName)
+					mountedShares = append(mountedShares, shareName)
+				}
+				break
+			}
+		}
+	}
+
+	// Env vars
+	if env, ok := body["env"].(map[string]interface{}); ok {
+		for key, val := range env {
+			valStr := fmt.Sprintf("%v", val)
+			if matched, _ := regexp.MatchString(`^[a-zA-Z_][a-zA-Z0-9_]*$`, key); matched {
+				safeVal := regexp.MustCompile("[`$\\\\;\"'|&<>]").ReplaceAllString(valStr, "")
+				cmd += fmt.Sprintf(` -e %s="%s"`, key, safeVal)
+			}
+		}
+	}
+
+	cmd += " " + image
+
+	out, ok := run(cmd)
+	if !ok {
+		jsonError(w, 500, "Failed to create container")
+		return
+	}
+
+	// Register app
+	var appPort interface{}
+	if ports, ok := body["ports"].(map[string]interface{}); ok {
+		for p := range ports {
+			appPort = parseIntDefault(p, 0)
+			break
+		}
+	}
+	apps := getInstalledApps()
+	filtered := make([]map[string]interface{}, 0)
+	for _, a := range apps {
+		if aid, _ := a["id"].(string); aid != id {
+			filtered = append(filtered, a)
+		}
+	}
+	filtered = append(filtered, map[string]interface{}{
+		"id": id, "name": name, "icon": bodyStr(body, "icon"), "port": appPort,
+		"image": image, "type": "container", "color": bodyStr(body, "color"),
+		"installedBy": session["username"],
+	})
+	saveInstalledApps(filtered)
+
+	jsonOk(w, map[string]interface{}{
+		"ok": true, "containerId": strings.TrimSpace(out),
+		"container":    map[string]interface{}{"id": id, "name": name, "image": image, "status": "running"},
+		"mountedShares": mountedShares,
+	})
+}
+
+func dockerStackDeploy(w http.ResponseWriter, r *http.Request) {
+	session := requireAuth(w, r)
+	if session == nil {
+		return
+	}
+	if !hasDockerPermission(session) {
+		jsonError(w, 403, "No permission to manage Docker")
+		return
+	}
+	if !isDockerInstalledGo() {
+		jsonError(w, 400, "Docker not installed")
+		return
+	}
+
+	body, _ := readBody(r)
+	id := sanitizeDockerNameGo(bodyStr(body, "id"))
+	compose := bodyStr(body, "compose")
+	if id == "" || compose == "" {
+		jsonError(w, 400, "Missing stack info")
+		return
+	}
+
+	conf := getDockerConfigGo()
+	dockerPath, _ := conf["path"].(string)
+	if dockerPath == "" {
+		dockerPath = "/var/lib/docker"
+	}
+	stackPath := filepath.Join(dockerPath, "stacks", id)
+	os.MkdirAll(stackPath, 0755)
+
+	// Write compose file
+	composePath := filepath.Join(stackPath, "docker-compose.yml")
+	os.WriteFile(composePath, []byte(compose), 0644)
+
+	// Write .env
+	if env, ok := body["env"].(map[string]interface{}); ok {
+		var lines []string
+		for k, v := range env {
+			lines = append(lines, fmt.Sprintf("%s=%v", k, v))
+		}
+		os.WriteFile(filepath.Join(stackPath, ".env"), []byte(strings.Join(lines, "\n")), 0644)
+	}
+
+	// Deploy
+	cmd := exec.Command("docker", "compose", "-f", composePath, "up", "-d")
+	cmd.Dir = stackPath
+	if out, err := cmd.CombinedOutput(); err != nil {
+		jsonError(w, 500, fmt.Sprintf("Failed to deploy stack: %s", string(out)))
+		return
+	}
+
+	// Register
+	apps := getInstalledApps()
+	filtered := make([]map[string]interface{}, 0)
+	for _, a := range apps {
+		if aid, _ := a["id"].(string); aid != id {
+			filtered = append(filtered, a)
+		}
+	}
+	filtered = append(filtered, map[string]interface{}{
+		"id": id, "name": bodyStr(body, "name"), "icon": bodyStr(body, "icon"),
+		"port": body["port"], "image": "stack", "type": "stack",
+		"color": bodyStr(body, "color"), "external": body["external"],
+		"installedBy": session["username"],
+	})
+	saveInstalledApps(filtered)
+
+	jsonOk(w, map[string]interface{}{"ok": true, "stack": id, "path": stackPath})
+}
+
+func dockerContainerAction(w http.ResponseWriter, r *http.Request, id, action string) {
+	session := requireAuth(w, r)
+	if session == nil {
+		return
+	}
+	if !hasDockerPermission(session) {
+		jsonError(w, 403, "No permission to manage Docker")
+		return
+	}
+	safeId := sanitizeDockerNameGo(id)
+	if safeId == "" {
+		jsonError(w, 400, "Invalid container ID")
+		return
+	}
+	if _, ok := run(fmt.Sprintf("docker %s %s 2>&1", action, safeId)); !ok {
+		jsonError(w, 500, fmt.Sprintf("Failed to %s container", action))
+		return
+	}
+	jsonOk(w, map[string]interface{}{"ok": true, "action": action, "containerId": safeId})
+}
+
+func dockerContainerDelete(w http.ResponseWriter, r *http.Request, id string) {
+	session := requireAuth(w, r)
+	if session == nil {
+		return
+	}
+	if !hasDockerPermission(session) {
+		jsonError(w, 403, "No permission to manage Docker")
+		return
+	}
+	safeId := sanitizeDockerNameGo(id)
+	if safeId == "" {
+		jsonError(w, 400, "Invalid container ID")
+		return
+	}
+	// Unregister immediately
+	apps := getInstalledApps()
+	filtered := make([]map[string]interface{}, 0)
+	for _, a := range apps {
+		if aid, _ := a["id"].(string); aid != safeId {
+			filtered = append(filtered, a)
+		}
+	}
+	saveInstalledApps(filtered)
+
+	// Remove in background
+	go func() {
+		run(fmt.Sprintf("docker stop %s 2>/dev/null && docker rm %s 2>/dev/null || docker rm -f %s 2>/dev/null", safeId, safeId, safeId))
+	}()
+	jsonOk(w, map[string]interface{}{"ok": true, "containerId": safeId})
+}
+
+func dockerContainerMounts(w http.ResponseWriter, r *http.Request, id string) {
+	session := requireAuth(w, r)
+	if session == nil {
+		return
+	}
+	if !hasDockerPermission(session) {
+		jsonError(w, 403, "No permission")
+		return
+	}
+	safeId := sanitizeDockerNameGo(id)
+	if safeId == "" {
+		jsonError(w, 400, "Invalid container ID")
+		return
+	}
+	out, ok := run(fmt.Sprintf(`docker inspect %s --format '{{range .Mounts}}{{.Source}}|{{.Destination}}|{{.Mode}}{{println}}{{end}}' 2>/dev/null`, safeId))
+	if !ok {
+		jsonError(w, 500, "Failed to get mounts")
+		return
+	}
+	var mounts []map[string]interface{}
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "|", 3)
+		if len(parts) >= 2 {
+			mode := "rw"
+			if len(parts) >= 3 {
+				mode = parts[2]
+			}
+			mounts = append(mounts, map[string]interface{}{"source": parts[0], "destination": parts[1], "mode": mode})
+		}
+	}
+	if mounts == nil {
+		mounts = []map[string]interface{}{}
+	}
+	jsonOk(w, map[string]interface{}{"containerId": safeId, "mounts": mounts})
+}
+
+func dockerContainerRebuild(w http.ResponseWriter, r *http.Request, id string) {
+	session := requireAuth(w, r)
+	if session == nil {
+		return
+	}
+	if !hasDockerPermission(session) {
+		jsonError(w, 403, "No permission")
+		return
+	}
+	safeId := sanitizeDockerNameGo(id)
+	if safeId == "" {
+		jsonError(w, 400, "Invalid container ID")
+		return
+	}
+	// Get current image
+	imgOut, ok := run(fmt.Sprintf("docker inspect %s --format '{{.Config.Image}}' 2>/dev/null", safeId))
+	if !ok {
+		jsonError(w, 500, "Failed to inspect container")
+		return
+	}
+	image := strings.TrimSpace(imgOut)
+	run(fmt.Sprintf("docker stop %s 2>/dev/null", safeId))
+	run(fmt.Sprintf("docker rm %s 2>/dev/null", safeId))
+	run(fmt.Sprintf("docker run -d --name %s --restart unless-stopped %s", safeId, image))
+	jsonOk(w, map[string]interface{}{"ok": true, "containerId": safeId})
+}
+
+func dockerStackDelete(w http.ResponseWriter, r *http.Request, id string) {
+	session := requireAuth(w, r)
+	if session == nil {
+		return
+	}
+	if !hasDockerPermission(session) {
+		jsonError(w, 403, "No permission")
+		return
+	}
+	safeId := sanitizeDockerNameGo(id)
+	if safeId == "" {
+		jsonError(w, 400, "Invalid stack ID")
+		return
+	}
+	// Unregister immediately
+	apps := getInstalledApps()
+	filtered := make([]map[string]interface{}, 0)
+	for _, a := range apps {
+		if aid, _ := a["id"].(string); aid != safeId {
+			filtered = append(filtered, a)
+		}
+	}
+	saveInstalledApps(filtered)
+
+	conf := getDockerConfigGo()
+	dockerPath, _ := conf["path"].(string)
+	if dockerPath == "" {
+		dockerPath = "/var/lib/docker"
+	}
+	stackPath := filepath.Join(dockerPath, "stacks", safeId)
+	composePath := filepath.Join(stackPath, "docker-compose.yml")
+
+	// Cleanup in background
+	go func() {
+		if _, err := os.Stat(composePath); err == nil {
+			cmd := exec.Command("docker", "compose", "-f", composePath, "down", "-v", "--remove-orphans")
+			cmd.Dir = stackPath
+			cmd.Run()
+		}
+		os.RemoveAll(stackPath)
+		os.RemoveAll(filepath.Join(dockerPath, "containers", safeId))
+	}()
+
+	jsonOk(w, map[string]interface{}{"ok": true})
+}
+
+func dockerPull(w http.ResponseWriter, r *http.Request) {
+	session := requireAuth(w, r)
+	if session == nil {
+		return
+	}
+	if !hasDockerPermission(session) {
+		jsonError(w, 403, "No permission")
+		return
+	}
+	rawImage := strings.TrimPrefix(r.URL.Path, "/api/docker/pull/")
+	decoded, _ := url.PathUnescape(rawImage)
+	image := sanitizeDockerNameGo(decoded)
+	if image == "" {
+		jsonError(w, 400, "Invalid image name")
+		return
+	}
+	if _, ok := run(fmt.Sprintf("docker pull %s 2>&1", image)); !ok {
+		jsonError(w, 500, "Failed to pull image")
+		return
+	}
+	jsonOk(w, map[string]interface{}{"ok": true, "image": image})
+}
+
+func permissionsMatrix(w http.ResponseWriter, r *http.Request) {
+	session := requireAdmin(w, r)
+	if session == nil {
+		return
+	}
+	users, _ := dbUsersList()
+	shares, _ := dbSharesList()
+	conf := getDockerConfigGo()
+	perms, _ := conf["permissions"].([]interface{})
+
+	var userList []map[string]interface{}
+	for _, u := range users {
+		username, _ := u["username"].(string)
+		role, _ := u["role"].(string)
+		hasDock := role == "admin"
+		for _, p := range perms {
+			if ps, _ := p.(string); ps == username {
+				hasDock = true
+			}
+		}
+		userList = append(userList, map[string]interface{}{"username": username, "role": role, "dockerAccess": hasDock})
+	}
+
+	var shareList []map[string]interface{}
+	for _, s := range shares {
+		shareList = append(shareList, map[string]interface{}{
+			"name": s["name"], "displayName": s["displayName"],
+			"userPermissions": s["permissions"], "appPermissions": s["appPermissions"],
+		})
+	}
+
+	jsonOk(w, map[string]interface{}{"users": userList, "shares": shareList, "dockerAdmins": perms})
+}
+
+// ═══════════════════════════════════
+// Firewall
+// ═══════════════════════════════════
+
+func firewallAddRule(w http.ResponseWriter, r *http.Request) {
+	session := requireAdmin(w, r)
+	if session == nil {
+		return
+	}
+	body, _ := readBody(r)
+	port := fmt.Sprintf("%v", body["port"])
+	protocol := bodyStr(body, "protocol")
+	action := bodyStr(body, "action")
+	source := bodyStr(body, "source")
+
+	if port == "" || protocol == "" || action == "" {
+		jsonError(w, 400, "port, protocol, and action required")
+		return
+	}
+
+	_, hasUfw := run("which ufw 2>/dev/null")
+	if hasUfw {
+		proto := ""
+		if protocol != "both" {
+			proto = "/" + protocol
+		}
+		src := ""
+		if source != "" && source != "any" && source != "Any" {
+			src = " from " + source
+		}
+		cmd := fmt.Sprintf("ufw %s %s%s%s 2>&1", action, port, proto, src)
+		result, _ := run(cmd)
+		jsonOk(w, map[string]interface{}{"ok": true, "command": cmd, "result": result})
+	} else {
+		jsonError(w, 400, "ufw not installed")
+	}
+}
+
+func firewallRemoveRule(w http.ResponseWriter, r *http.Request) {
+	session := requireAdmin(w, r)
+	if session == nil {
+		return
+	}
+	body, _ := readBody(r)
+	ruleNum := fmt.Sprintf("%v", body["ruleNum"])
+	if ruleNum == "" {
+		jsonError(w, 400, "ruleNum required")
+		return
+	}
+	result, _ := run(fmt.Sprintf(`echo "y" | ufw delete %s 2>&1`, ruleNum))
+	jsonOk(w, map[string]interface{}{"ok": true, "result": result})
+}
+
+func firewallToggle(w http.ResponseWriter, r *http.Request) {
+	session := requireAdmin(w, r)
+	if session == nil {
+		return
+	}
+	body, _ := readBody(r)
+	enable, _ := body["enable"].(bool)
+	if enable {
+		result, _ := run(`echo "y" | ufw enable 2>&1`)
+		jsonOk(w, map[string]interface{}{"ok": true, "result": result})
+	} else {
+		result, _ := run("ufw disable 2>&1")
+		jsonOk(w, map[string]interface{}{"ok": true, "result": result})
+	}
+}
+
+// ═══════════════════════════════════
+// Hardware driver install
+// ═══════════════════════════════════
+
+func hardwareInstallDriver(w http.ResponseWriter, r *http.Request) {
+	session := requireAdmin(w, r)
+	if session == nil {
+		return
+	}
+	body, _ := readBody(r)
+	pkg := bodyStr(body, "package")
+	action := bodyStr(body, "action")
+	if pkg == "" || action == "" {
+		jsonError(w, 400, "package and action required")
+		return
+	}
+	if matched, _ := regexp.MatchString(`^(nvidia-driver-\d+|nvidia-driver-\d+-server|nvidia-driver-\d+-open|xserver-xorg-video-\w+|mesa-\w+|linux-modules-nvidia-\S+)$`, pkg); !matched {
+		jsonError(w, 400, "Invalid driver package name")
+		return
+	}
+	if action != "install" && action != "remove" {
+		jsonError(w, 400, "action must be install or remove")
+		return
+	}
+
+	logFile := fmt.Sprintf("/tmp/nimbus-driver-%d.log", time.Now().UnixMilli())
+	cmd := fmt.Sprintf("apt-get %s -y %s", action, pkg)
+	go func() {
+		out, _ := exec.Command("bash", "-c", cmd).CombinedOutput()
+		os.WriteFile(logFile, out, 0644)
+	}()
+	jsonOk(w, map[string]interface{}{"ok": true, "message": fmt.Sprintf("%s %s started", action, pkg), "logFile": logFile})
+}
+
+func hardwareDriverLog(w http.ResponseWriter, r *http.Request) {
+	session := requireAuth(w, r)
+	if session == nil {
+		return
+	}
+	logFile := "/tmp/" + filepath.Base(r.URL.Path)
+	if !strings.HasPrefix(logFile, "/tmp/nimbus-driver-") {
+		jsonError(w, 400, "Invalid log file")
+		return
+	}
+	content, err := os.ReadFile(logFile)
+	if err != nil {
+		jsonOk(w, map[string]interface{}{"content": "Waiting...", "done": false, "success": false})
+		return
+	}
+	s := string(content)
+	done := strings.Contains(s, "SUCCESS:") || strings.Contains(s, "ERROR:")
+	success := strings.Contains(s, "SUCCESS:")
+	jsonOk(w, map[string]interface{}{"content": s, "done": done, "success": success})
+}
