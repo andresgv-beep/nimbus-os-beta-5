@@ -110,6 +110,18 @@
       {#await import('$lib/apps/FileManager.svelte') then module}
         <svelte:component this={module.default} />
       {/await}
+    {:else if win.appId === 'nimsettings'}
+      {#await import('$lib/apps/Settings.svelte') then module}
+        <svelte:component this={module.default} />
+      {/await}
+    {:else if win.appId === 'nimtorrent'}
+      {#await import('$lib/apps/NimTorrent.svelte') then module}
+        <svelte:component this={module.default} />
+      {/await}
+    {:else if win.appId === 'appstore'}
+      {#await import('$lib/apps/AppStore.svelte') then module}
+        <svelte:component this={module.default} />
+      {/await}
     {:else}
       <div class="placeholder">
         <span style="font-size:48px">{meta.icon}</span>
