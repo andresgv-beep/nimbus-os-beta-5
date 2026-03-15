@@ -538,6 +538,10 @@ func createPoolGo(body map[string]interface{}) map[string]interface{} {
 	var disks []string
 	for _, d := range disksRaw {
 		if ds, ok := d.(string); ok {
+			// Normalize: accept both "sdb" and "/dev/sdb"
+			if !strings.HasPrefix(ds, "/dev/") {
+				ds = "/dev/" + ds
+			}
 			disks = append(disks, ds)
 		}
 	}
@@ -764,14 +768,17 @@ func wipeDiskGo(diskPath string) map[string]interface{} {
 		return map[string]interface{}{"error": "Cannot wipe the boot disk"}
 	}
 
-	// Unmount all partitions of this disk first
+	// Unmount all partitions of this disk first, deactivate swap
 	partitions, _ := run(fmt.Sprintf("lsblk -ln -o NAME %s 2>/dev/null | tail -n +2", diskPath))
 	for _, p := range strings.Fields(partitions) {
 		p = strings.TrimSpace(p)
 		if p != "" {
-			run(fmt.Sprintf("umount /dev/%s 2>/dev/null || true", p))
+			run(fmt.Sprintf("swapoff /dev/%s 2>/dev/null || true", p))
+			run(fmt.Sprintf("umount -f /dev/%s 2>/dev/null || true", p))
 		}
 	}
+	// Also try unmounting the disk device itself
+	run(fmt.Sprintf("umount -f %s 2>/dev/null || true", diskPath))
 
 	// Stop any mdadm arrays using this disk
 	if mdstat, err := os.ReadFile("/proc/mdstat"); err == nil {
@@ -800,20 +807,26 @@ func wipeDiskGo(diskPath string) map[string]interface{} {
 	}
 
 	// Wipe filesystem signatures and partition table
-	wipefs, wipeOk := run(fmt.Sprintf("wipefs -a %s 2>&1", diskPath))
-	if !wipeOk {
-		return map[string]interface{}{"error": fmt.Sprintf("wipefs failed on %s: %s", diskPath, wipefs)}
-	}
+	// 1) Zero first 10MB to destroy partition table headers
+	run(fmt.Sprintf("dd if=/dev/zero of=%s bs=1M count=10 2>/dev/null || true", diskPath))
+	// 2) Destroy GPT structures if sgdisk available
 	if _, ok := run("which sgdisk 2>/dev/null"); ok {
 		run(fmt.Sprintf("sgdisk -Z %s 2>/dev/null || true", diskPath))
 	}
-	run(fmt.Sprintf("dd if=/dev/zero of=%s bs=1M count=10 2>/dev/null || true", diskPath))
+	// 3) Wipe all remaining filesystem signatures
+	wipefs, wipeOk := run(fmt.Sprintf("wipefs -af %s 2>&1", diskPath))
+	if !wipeOk {
+		return map[string]interface{}{"error": fmt.Sprintf("wipefs failed on %s: %s", diskPath, wipefs)}
+	}
+	// 4) Force kernel to re-read partition table
 	run(fmt.Sprintf("partprobe %s 2>/dev/null || true", diskPath))
+	run(fmt.Sprintf("blockdev --rereadpt %s 2>/dev/null || true", diskPath))
 
 	// Verify: check that no partitions remain
 	time.Sleep(1 * time.Second)
+	run(fmt.Sprintf("blockdev --rereadpt %s 2>/dev/null || true", diskPath))
 	run(fmt.Sprintf("partprobe %s 2>/dev/null || true", diskPath))
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(1 * time.Second)
 	verifyParts, _ := run(fmt.Sprintf("lsblk -ln -o NAME %s 2>/dev/null | tail -n +2", diskPath))
 	if strings.TrimSpace(verifyParts) != "" {
 		return map[string]interface{}{"error": fmt.Sprintf("Wipe completed but partitions still detected on %s. The disk may be in use or the kernel has not yet updated.", diskPath)}
