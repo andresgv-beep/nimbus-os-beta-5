@@ -1,11 +1,33 @@
 <script>
-  import { prefs, pinnedApps } from '$lib/stores/theme.js';
-  import { windowList, openWindow, focusWindow, restoreWindow, minimizeWindow } from '$lib/stores/windows.js';
+  import { prefs, pinnedApps, setPref } from '$lib/stores/theme.js';
+  import { windowList, openWindow, focusWindow, restoreWindow, minimizeWindow, closeWindow } from '$lib/stores/windows.js';
   import { logout } from '$lib/stores/auth.js';
   import { APP_META } from '$lib/apps.js';
   import Launcher from './Launcher.svelte';
 
   let showLauncher = false;
+
+  // ── Context menu ──
+  let ctxMenu = null; // { appId, x, y, win }
+
+  function openCtxMenu(e, appId, win = null) {
+    e.preventDefault();
+    e.stopPropagation();
+    ctxMenu = { appId, x: e.clientX, y: e.clientY, win };
+  }
+
+  function closeCtxMenu() { ctxMenu = null; }
+
+  function isPinned(appId) { return $pinnedApps.includes(appId); }
+
+  function togglePin(appId) {
+    if (isPinned(appId)) {
+      setPref('pinnedApps', $pinnedApps.filter(id => id !== appId));
+    } else {
+      setPref('pinnedApps', [...$pinnedApps, appId]);
+    }
+    closeCtxMenu();
+  }
 
   function handleAppClick(appId) {
     const meta = APP_META[appId];
@@ -77,7 +99,9 @@
           {@const isOpen = $windowList.some(w => w.appId === appId)}
           {@const isMin  = $windowList.find(w => w.appId === appId)?.minimized}
           <button class="tb-btn" class:open={isOpen} class:minimized={isMin}
-            title={meta.name} on:click={() => handleAppClick(appId)}>
+            title={meta.name}
+            on:click={() => handleAppClick(appId)}
+            on:contextmenu={(e) => openCtxMenu(e, appId, $windowList.find(w => w.appId === appId))}>
             <span class="tb-emoji">{meta.icon}</span>
             {#if isOpen}<div class="tb-dot"></div>{/if}
           </button>
@@ -91,7 +115,9 @@
         {#each openUnpinned as win}
           {@const meta = APP_META[win.appId]}
           <button class="tb-btn open" class:minimized={win.minimized}
-            title={meta?.name || win.appId} on:click={() => toggleMinimize(win)}>
+            title={meta?.name || win.appId}
+            on:click={() => toggleMinimize(win)}
+            on:contextmenu={(e) => openCtxMenu(e, win.appId, win)}>
             <span class="tb-emoji">{meta?.icon || '📦'}</span>
             <div class="tb-dot"></div>
           </button>
@@ -136,7 +162,9 @@
           {@const isOpen = $windowList.some(w => w.appId === appId)}
           {@const isMin  = $windowList.find(w => w.appId === appId)?.minimized}
           <button class="dock-btn" class:open={isOpen} class:minimized={isMin}
-            title={meta.name} on:click={() => handleAppClick(appId)}>
+            title={meta.name}
+            on:click={() => handleAppClick(appId)}
+            on:contextmenu={(e) => openCtxMenu(e, appId, $windowList.find(w => w.appId === appId))}>
             <span class="dock-emoji">{meta.icon}</span>
             {#if isOpen}<div class="dock-dot"></div>{/if}
           </button>
@@ -148,7 +176,9 @@
         {#each openUnpinned as win}
           {@const meta = APP_META[win.appId]}
           <button class="dock-btn open" class:minimized={win.minimized}
-            title={meta?.name || win.appId} on:click={() => toggleMinimize(win)}>
+            title={meta?.name || win.appId}
+            on:click={() => toggleMinimize(win)}
+            on:contextmenu={(e) => openCtxMenu(e, win.appId, win)}>
             <span class="dock-emoji">{meta?.icon || '📦'}</span>
             <div class="dock-dot"></div>
           </button>
@@ -157,6 +187,73 @@
     </div>
   {/if}
 </div>
+
+<!-- ── CONTEXT MENU ── -->
+{#if ctxMenu}
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div class="ctx-overlay" on:click={closeCtxMenu} on:contextmenu|preventDefault={closeCtxMenu}></div>
+
+  <div class="ctx-menu" style="left:{ctxMenu.x}px; top:{ctxMenu.y}px;">
+    {@const meta = APP_META[ctxMenu.appId]}
+    <!-- Header -->
+    <div class="ctx-header">
+      <span class="ctx-icon">{meta?.icon || '📦'}</span>
+      <span class="ctx-app-name">{meta?.name || ctxMenu.appId}</span>
+    </div>
+    <div class="ctx-divider"></div>
+
+    <!-- Open / Focus -->
+    {#if ctxMenu.win}
+      {#if ctxMenu.win.minimized}
+        <!-- svelte-ignore a11y_click_events_have_key_events -->
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div class="ctx-item" on:click={() => { restoreWindow(ctxMenu.win.id); closeCtxMenu(); }}>
+          <span class="ctx-ico">◻</span> Restaurar
+        </div>
+      {:else}
+        <!-- svelte-ignore a11y_click_events_have_key_events -->
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div class="ctx-item" on:click={() => { focusWindow(ctxMenu.win.id); closeCtxMenu(); }}>
+          <span class="ctx-ico">◈</span> Enfocar
+        </div>
+        <!-- svelte-ignore a11y_click_events_have_key_events -->
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div class="ctx-item" on:click={() => { minimizeWindow(ctxMenu.win.id); closeCtxMenu(); }}>
+          <span class="ctx-ico">—</span> Minimizar
+        </div>
+      {/if}
+      <!-- svelte-ignore a11y_click_events_have_key_events -->
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div class="ctx-item danger" on:click={() => { closeWindow(ctxMenu.win.id); closeCtxMenu(); }}>
+        <span class="ctx-ico">✕</span> Cerrar
+      </div>
+      <div class="ctx-divider"></div>
+    {:else}
+      <!-- svelte-ignore a11y_click_events_have_key_events -->
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div class="ctx-item" on:click={() => { handleAppClick(ctxMenu.appId); closeCtxMenu(); }}>
+        <span class="ctx-ico">▶</span> Abrir
+      </div>
+      <div class="ctx-divider"></div>
+    {/if}
+
+    <!-- Pin / Unpin -->
+    {#if isPinned(ctxMenu.appId)}
+      <!-- svelte-ignore a11y_click_events_have_key_events -->
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div class="ctx-item" on:click={() => togglePin(ctxMenu.appId)}>
+        <span class="ctx-ico">◉</span> Desanclar de la barra
+      </div>
+    {:else}
+      <!-- svelte-ignore a11y_click_events_have_key_events -->
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div class="ctx-item" on:click={() => togglePin(ctxMenu.appId)}>
+        <span class="ctx-ico">◎</span> Anclar a la barra
+      </div>
+    {/if}
+  </div>
+{/if}
 
 <style>
   /* ── CLASSIC ── */
@@ -330,4 +427,42 @@
   .taskbar[data-size="small"]  .dock-emoji { font-size: 18px; }
   .taskbar[data-size="large"]  .dock-btn { width: 50px; height: 50px; }
   .taskbar[data-size="large"]  .dock-emoji { font-size: 26px; }
+
+  /* ── CONTEXT MENU ── */
+  .ctx-overlay {
+    position: fixed; inset: 0; z-index: 9998;
+  }
+  .ctx-menu {
+    position: fixed; z-index: 9999;
+    min-width: 200px;
+    background: var(--bg-inner);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    box-shadow: 0 16px 40px rgba(0,0,0,0.45), 0 2px 8px rgba(0,0,0,0.2);
+    overflow: hidden;
+    animation: ctxIn .12s cubic-bezier(0.16,1,0.3,1) both;
+    /* Flip up if near bottom */
+    transform: translateY(-100%);
+  }
+  @keyframes ctxIn {
+    from { opacity:0; transform:translateY(calc(-100% + 6px)) scale(0.97); }
+    to   { opacity:1; transform:translateY(-100%) scale(1); }
+  }
+  .ctx-header {
+    display: flex; align-items: center; gap: 8px;
+    padding: 10px 12px 8px;
+  }
+  .ctx-icon { font-size: 16px; }
+  .ctx-app-name { font-size: 12px; font-weight: 600; color: var(--text-1); }
+  .ctx-divider { height: 1px; background: var(--border); margin: 2px 0; }
+  .ctx-item {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 12px; font-size: 12px; color: var(--text-2);
+    cursor: pointer; transition: all .1s;
+  }
+  .ctx-item:hover { background: var(--active-bg); color: var(--text-1); }
+  .ctx-item.danger { color: var(--red); }
+  .ctx-item.danger:hover { background: rgba(248,113,113,0.10); }
+  .ctx-ico { font-size: 11px; width: 14px; text-align: center; color: var(--text-3); flex-shrink: 0; }
+  .ctx-item.danger .ctx-ico { color: var(--red); }
 </style>
