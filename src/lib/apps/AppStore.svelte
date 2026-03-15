@@ -153,16 +153,15 @@
                 style="animation-delay:{i * 0.025}s"
                 on:click={() => selectedApp = app}>
                 <div class="card-media">
-                  {#if true}
+                  {#if hasScreenshot(app.id)}
                     <img class="card-screenshot" src={screenshotUrl(app.id)} alt={app.name}
-                      on:error={(e) => { e.target.style.display='none'; e.target.nextElementSibling?.remove(); e.target.parentElement.classList.add('no-ss'); }} />
+                      on:error={() => onScreenshotError(app.id)} />
                     <div class="card-screenshot-fade"></div>
                   {:else}
                     <div class="card-no-screenshot">
                       <div class="card-icon-blur-bg" style="background-image:url({app.icon})"></div>
                       <img class="card-icon-center" src={app.icon} alt="" />
                     </div>
-                  <!-- fallback always shown, hidden by CSS if screenshot loaded -->
                   {/if}
                   {#if installed[app.id]}
                     <div class="card-inst-pill"><div class="inst-dot"></div>Instalada</div>
@@ -295,7 +294,7 @@
   .store-body::-webkit-scrollbar{width:3px}
   .store-body::-webkit-scrollbar-thumb{background:rgba(128,128,128,0.15);border-radius:2px}
   .store-empty{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;color:var(--text-3);font-size:12px}
-  .spinner{width:24px;height:24px;border-radius:50%;border:2px solid rgba(255,255,255,0.08);border-top-color:var(--accent);animation:spin .7s linear infinite}
+  .spinner{width:24px;height:24px;border-radius:50%;border:2px solid var(--border);border-top-color:var(--accent);animation:spin .7s linear infinite}
   @keyframes spin{to{transform:rotate(360deg)}}
   .app-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(175px,1fr));gap:12px}
   .app-card{border-radius:12px;overflow:hidden;cursor:pointer;border:1px solid var(--border);background:var(--ibtn-bg);transition:all .2s;animation:fadeUp .3s ease both;display:flex;flex-direction:column}
