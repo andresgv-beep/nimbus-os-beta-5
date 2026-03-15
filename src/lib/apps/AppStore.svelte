@@ -1,0 +1,361 @@
+<script>
+  import { onMount } from 'svelte';
+  import { getToken } from '$lib/stores/auth.js';
+
+  const CATALOG_URL = 'https://raw.githubusercontent.com/andresgv-beep/nimbusos-appstore/main/catalog.json';
+  const hdrs = () => ({ 'Authorization': `Bearer ${getToken()}` });
+
+  let catalog = null;
+  let installed = {};
+  let loading = true;
+  let error = null;
+  let activeCategory = 'all';
+  let search = '';
+  let selectedApp = null;
+  let installing = {};
+  let removing = {};
+
+  async function loadCatalog() {
+    try {
+      const [catRes, contRes] = await Promise.all([
+        fetch(CATALOG_URL),
+        fetch('/api/containers', { headers: hdrs() }).catch(() => ({ ok: false })),
+      ]);
+      catalog = await catRes.json();
+      if (contRes.ok) {
+        const containers = await contRes.json();
+        for (const [id, app] of Object.entries(catalog.apps)) {
+          const match = (containers || []).find(c =>
+            c.Names?.some(n => n.includes(id)) ||
+            c.Image?.includes(app.image?.split(':')[0])
+          );
+          if (match) installed[id] = { status: match.State || 'running', port: app.port };
+        }
+        installed = installed;
+      }
+    } catch(e) { error = 'No se pudo cargar el catálogo'; }
+    loading = false;
+  }
+
+  async function installApp(appId) {
+    const app = catalog.apps[appId];
+    if (!app) return;
+    installing = { ...installing, [appId]: true };
+    try {
+      const res = await fetch('/api/apps/install', {
+        method: 'POST',
+        headers: { ...hdrs(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ appId, compose: app.compose, env: app.env || {} }),
+      });
+      const d = await res.json();
+      if (d.ok) installed = { ...installed, [appId]: { status: 'running', port: app.port } };
+    } catch(e) { console.error(e); }
+    installing = { ...installing, [appId]: false };
+  }
+
+  async function removeApp(appId) {
+    if (!confirm(`¿Eliminar ${catalog.apps[appId]?.name}?`)) return;
+    removing = { ...removing, [appId]: true };
+    try {
+      await fetch(`/api/apps/${appId}`, { method: 'DELETE', headers: hdrs() });
+      const next = { ...installed }; delete next[appId]; installed = next;
+    } catch(e) { console.error(e); }
+    removing = { ...removing, [appId]: false };
+  }
+
+  onMount(loadCatalog);
+
+  const CAT_ICONS = { media:'🎬', cloud:'☁', downloads:'⬇', homelab:'🏠', development:'⌨', security:'🔒', monitoring:'📊' };
+
+  $: categories = catalog ? [
+    { id: 'all', label: 'Todas', icon: '⊟' },
+    ...Object.entries(catalog.categories).map(([id, label]) => ({ id, label, icon: CAT_ICONS[id] || '●' }))
+  ] : [];
+
+  $: filteredApps = catalog ? Object.entries(catalog.apps)
+    .filter(([id, app]) => {
+      if (activeCategory === '_installed') return !!installed[id];
+      const matchCat = activeCategory === 'all' || app.category === activeCategory;
+      const q = search.toLowerCase();
+      const matchSearch = !q || app.name.toLowerCase().includes(q) || app.description.toLowerCase().includes(q);
+      return matchCat && matchSearch;
+    })
+    .map(([id, app]) => ({ id, ...app }))
+  : [];
+
+  $: installedCount = Object.keys(installed).length;
+
+  // Auto-screenshot: tries screenshots/{id}.png, falls back to icon on error
+  const SCREENSHOTS_BASE = 'https://raw.githubusercontent.com/andresgv-beep/nimbusos-appstore/main/screenshots';
+  let failedScreenshots = new Set();
+  function screenshotUrl(id) { return `${SCREENSHOTS_BASE}/${id}/preview.png`; }
+  function onScreenshotError(id) { failedScreenshots.add(id); failedScreenshots = failedScreenshots; }
+  function hasScreenshot(id) { return !failedScreenshots.has(id); }
+</script>
+
+<div class="store-root">
+  <div class="sidebar">
+    <div class="sb-header">
+      <svg class="sb-logo" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/>
+      </svg>
+      <div>
+        <div class="sb-title">AppStore</div>
+        <div class="sb-sub">Docker apps</div>
+      </div>
+    </div>
+    <input class="sb-search" type="text" placeholder="⌕  Buscar..." bind:value={search} />
+    <div class="sb-section">Categorías</div>
+    {#each categories as cat}
+      <!-- svelte-ignore a11y_click_events_have_key_events -->
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div class="sb-item" class:active={activeCategory === cat.id}
+        on:click={() => { activeCategory = cat.id; selectedApp = null; }}>
+        <span class="sb-ico">{cat.icon}</span>{cat.label}
+      </div>
+    {/each}
+    {#if installedCount > 0}
+      <div class="sb-section" style="margin-top:8px">Mis apps</div>
+      <!-- svelte-ignore a11y_click_events_have_key_events -->
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div class="sb-item" class:active={activeCategory === '_installed'}
+        on:click={() => { activeCategory = '_installed'; selectedApp = null; }}>
+        <span class="sb-ico">✓</span>Instaladas
+        <span class="sb-badge">{installedCount}</span>
+      </div>
+    {/if}
+  </div>
+
+  <div class="inner-wrap">
+    <div class="inner">
+      <div class="inner-titlebar">
+        <div class="tb-title">AppStore</div>
+        <div class="tb-sub">— {categories.find(c => c.id === activeCategory)?.label || 'Instaladas'}</div>
+        {#if !loading && catalog}<div class="tb-count">{filteredApps.length} apps</div>{/if}
+      </div>
+      <div class="store-body">
+        {#if loading}
+          <div class="store-empty"><div class="spinner"></div><span>Cargando catálogo...</span></div>
+        {:else if error}
+          <div class="store-empty">
+            <div style="font-size:32px;opacity:.3">⚠</div>
+            <span>{error}</span>
+            <button class="btn-secondary" on:click={loadCatalog}>Reintentar</button>
+          </div>
+        {:else if filteredApps.length === 0}
+          <div class="store-empty"><div style="font-size:32px;opacity:.3">⊘</div><span>No hay apps</span></div>
+        {:else}
+          <div class="app-grid">
+            {#each filteredApps as app, i}
+              <!-- svelte-ignore a11y_click_events_have_key_events -->
+              <!-- svelte-ignore a11y_no_static_element_interactions -->
+              <div class="app-card" class:is-installed={!!installed[app.id]}
+                style="animation-delay:{i * 0.025}s"
+                on:click={() => selectedApp = app}>
+                <div class="card-media">
+                  {#if true}
+                    <img class="card-screenshot" src={screenshotUrl(app.id)} alt={app.name}
+                      on:error={(e) => { e.target.style.display='none'; e.target.nextElementSibling?.remove(); e.target.parentElement.classList.add('no-ss'); }} />
+                    <div class="card-screenshot-fade"></div>
+                  {:else}
+                    <div class="card-no-screenshot">
+                      <div class="card-icon-blur-bg" style="background-image:url({app.icon})"></div>
+                      <img class="card-icon-center" src={app.icon} alt="" />
+                    </div>
+                  <!-- fallback always shown, hidden by CSS if screenshot loaded -->
+                  {/if}
+                  {#if installed[app.id]}
+                    <div class="card-inst-pill"><div class="inst-dot"></div>Instalada</div>
+                  {/if}
+                  {#if app.official}
+                    <div class="card-official">✓</div>
+                  {/if}
+                </div>
+                <div class="card-body">
+                  <div class="card-row">
+                    <img class="card-icon" src={app.icon} alt={app.name} on:error={(e) => e.target.style.opacity='0'} />
+                    <div>
+                      <div class="card-name">{app.name}</div>
+                      <div class="card-cat">{catalog.categories[app.category] || app.category}</div>
+                    </div>
+                  </div>
+                  <div class="card-desc">{app.description}</div>
+                </div>
+              </div>
+            {/each}
+          </div>
+        {/if}
+      </div>
+      <div class="statusbar">
+        <div class="status-dot"></div>
+        <span>nimbusos-appstore</span>
+        <div class="status-sep"></div>
+        <span>{catalog ? `v${catalog.version} · ${catalog.updated}` : '—'}</span>
+        <span style="margin-left:auto">{installedCount} instaladas</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+{#if selectedApp}
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div class="modal-overlay" on:click|self={() => selectedApp = null}></div>
+  <div class="modal">
+    <div class="modal-hero">
+      {#if hasScreenshot(selectedApp.id)}
+        <img class="modal-hero-img" src={screenshotUrl(selectedApp.id)} alt={selectedApp.name}
+          on:error={() => onScreenshotError(selectedApp.id)} />
+        <div class="modal-hero-fade"></div>
+      {:else}
+        <div class="modal-hero-empty">
+          <div class="modal-hero-bg" style="background-image:url({selectedApp.icon})"></div>
+          <img class="modal-hero-icon" src={selectedApp.icon} alt={selectedApp.name} />
+        </div>
+      {/if}
+      <!-- svelte-ignore a11y_click_events_have_key_events -->
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div class="modal-close" on:click={() => selectedApp = null}>✕</div>
+    </div>
+    <div class="modal-body">
+      <div class="modal-header">
+        <img class="modal-icon" src={selectedApp.icon} alt={selectedApp.name} on:error={(e) => e.target.style.opacity='0'} />
+        <div class="modal-info">
+          <div class="modal-name">{selectedApp.name}</div>
+          <div class="modal-cat">{catalog.categories[selectedApp.category] || selectedApp.category}</div>
+          <div class="modal-tags">
+            {#if selectedApp.port}<span class="tag">Puerto {selectedApp.port}</span>{/if}
+            {#if selectedApp.official}<span class="tag accent">Oficial</span>{/if}
+            {#if selectedApp.isStack}<span class="tag">Multi-servicio</span>{/if}
+          </div>
+        </div>
+        <div class="modal-cta">
+          {#if installed[selectedApp.id]}
+            <div class="modal-inst-row"><div class="inst-dot"></div><span>Instalada</span></div>
+            {#if selectedApp.port}
+              <a class="btn-open" href="http://localhost:{selectedApp.port}" target="_blank">Abrir →</a>
+            {/if}
+            <button class="btn-danger"
+              on:click={() => { removeApp(selectedApp.id); selectedApp = null; }}
+              disabled={removing[selectedApp.id]}>
+              {removing[selectedApp.id] ? 'Eliminando...' : 'Eliminar'}
+            </button>
+          {:else}
+            <button class="btn-install"
+              on:click={() => { installApp(selectedApp.id); selectedApp = null; }}
+              disabled={installing[selectedApp.id]}>
+              {installing[selectedApp.id] ? 'Instalando...' : '↓ Instalar'}
+            </button>
+          {/if}
+        </div>
+      </div>
+      <p class="modal-desc">{selectedApp.description}</p>
+      {#if selectedApp.image}
+        <div class="modal-field-row">
+          <span class="mf-label">Imagen Docker</span>
+          <span class="mf-value">{selectedApp.image}</span>
+        </div>
+      {/if}
+      {#if selectedApp.credentials}
+        <div class="modal-section-label">Credenciales por defecto</div>
+        {#if selectedApp.credentials.username}
+          <div class="modal-field-row"><span class="mf-label">Usuario</span><span class="mf-value">{selectedApp.credentials.username}</span></div>
+        {/if}
+        {#if selectedApp.credentials.password}
+          <div class="modal-field-row"><span class="mf-label">Contraseña</span><span class="mf-value">{selectedApp.credentials.password}</span></div>
+        {/if}
+      {/if}
+    </div>
+  </div>
+{/if}
+
+<style>
+  .store-root{width:100%;height:100%;display:flex;overflow:hidden;font-family:'DM Sans',sans-serif;color:var(--text-1)}
+  .sidebar{width:186px;flex-shrink:0;display:flex;flex-direction:column;padding:12px 8px;background:var(--bg-sidebar)}
+  .sb-header{display:flex;align-items:center;gap:9px;padding:14px 8px 14px}
+  .sb-logo{color:var(--accent);flex-shrink:0}
+  .sb-title{font-size:13px;font-weight:700;color:var(--text-1)}
+  .sb-sub{font-size:9px;color:var(--text-3);text-transform:uppercase;letter-spacing:.04em}
+  .sb-search{width:100%;padding:5px 10px;border-radius:8px;margin-bottom:10px;border:1px solid var(--border);background:var(--ibtn-bg);color:var(--text-1);font-size:11px;font-family:inherit;outline:none;transition:border-color .15s}
+  .sb-search:focus{border-color:var(--border-hi)}
+  .sb-search::placeholder{color:var(--text-3)}
+  .sb-section{font-size:9px;font-weight:600;color:var(--text-3);text-transform:uppercase;letter-spacing:.08em;padding:0 10px 4px;margin-top:4px}
+  .sb-item{display:flex;align-items:center;gap:7px;padding:7px 10px;border-radius:8px;cursor:pointer;font-size:12px;color:var(--text-2);border:1px solid transparent;transition:all .15s}
+  .sb-item:hover{background:rgba(128,128,128,0.10);color:var(--text-1)}
+  .sb-item.active{background:var(--active-bg);color:var(--text-1);border-color:var(--border-hi)}
+  .sb-ico{font-size:12px;width:16px;text-align:center;flex-shrink:0}
+  .sb-badge{margin-left:auto;font-size:9px;font-weight:700;font-family:'DM Mono',monospace;padding:1px 6px;border-radius:8px;background:rgba(74,222,128,0.10);border:1px solid rgba(74,222,128,0.25);color:var(--green)}
+  .inner-wrap{flex:1;padding:8px;display:flex}
+  .inner{flex:1;border-radius:10px;border:1px solid var(--border);background:var(--bg-inner);display:flex;flex-direction:column;overflow:hidden}
+  .inner-titlebar{display:flex;align-items:center;gap:8px;padding:10px 16px 9px;background:var(--bg-bar);flex-shrink:0}
+  .tb-title{font-size:13px;font-weight:600;color:var(--text-1)}
+  .tb-sub{font-size:11px;color:var(--text-3)}
+  .tb-count{margin-left:auto;font-size:10px;color:var(--text-3);font-family:'DM Mono',monospace}
+  .store-body{flex:1;overflow-y:auto;padding:14px}
+  .store-body::-webkit-scrollbar{width:3px}
+  .store-body::-webkit-scrollbar-thumb{background:rgba(128,128,128,0.15);border-radius:2px}
+  .store-empty{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;color:var(--text-3);font-size:12px}
+  .spinner{width:24px;height:24px;border-radius:50%;border:2px solid rgba(255,255,255,0.08);border-top-color:var(--accent);animation:spin .7s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .app-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(175px,1fr));gap:12px}
+  .app-card{border-radius:12px;overflow:hidden;cursor:pointer;border:1px solid var(--border);background:var(--ibtn-bg);transition:all .2s;animation:fadeUp .3s ease both;display:flex;flex-direction:column}
+  .app-card:hover{transform:translateY(-2px);border-color:var(--border-hi);box-shadow:0 10px 28px rgba(0,0,0,0.22)}
+  .app-card.is-installed{border-color:rgba(74,222,128,0.35)}
+  @keyframes fadeUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+  .card-media{height:112px;position:relative;overflow:hidden;flex-shrink:0;background:var(--bg-frame)}
+  .card-screenshot{width:100%;height:100%;object-fit:cover;display:block}
+  .card-screenshot-fade{position:absolute;inset:0;background:linear-gradient(180deg,transparent 55%,rgba(0,0,0,0.45) 100%)}
+  .card-no-screenshot{width:100%;height:100%;display:flex;align-items:center;justify-content:center;position:relative;overflow:hidden}
+  .card-icon-blur-bg{position:absolute;inset:-10px;background-size:cover;background-position:center;filter:blur(20px) saturate(1.5);opacity:.2;transform:scale(1.1)}
+  .card-icon-center{width:48px;height:48px;object-fit:contain;position:relative;z-index:1;filter:drop-shadow(0 4px 10px rgba(0,0,0,0.3))}
+  .card-inst-pill{position:absolute;top:7px;left:7px;display:flex;align-items:center;gap:4px;padding:3px 8px;border-radius:20px;font-size:9px;font-weight:600;background:rgba(0,0,0,0.55);backdrop-filter:blur(6px);color:#4ade80}
+  .inst-dot{width:5px;height:5px;border-radius:50%;background:var(--green);box-shadow:0 0 5px rgba(74,222,128,0.9);flex-shrink:0}
+  .card-official{position:absolute;top:7px;right:7px;width:18px;height:18px;border-radius:50%;background:rgba(124,111,255,0.85);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;font-size:8px;font-weight:700;color:#fff}
+  .card-body{padding:10px 12px 12px;display:flex;flex-direction:column;gap:6px}
+  .card-row{display:flex;align-items:center;gap:8px}
+  .card-icon{width:28px;height:28px;border-radius:7px;object-fit:contain;flex-shrink:0}
+  .card-name{font-size:12px;font-weight:600;color:var(--text-1)}
+  .card-cat{font-size:9px;color:var(--text-3)}
+  .card-desc{font-size:10px;color:var(--text-3);line-height:1.4;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .modal-overlay{position:fixed;inset:0;z-index:200;background:rgba(0,0,0,0.65);backdrop-filter:blur(6px)}
+  .modal{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:201;width:520px;max-width:92%;max-height:88vh;background:var(--bg-inner);border-radius:16px;border:1px solid var(--border);box-shadow:0 40px 100px rgba(0,0,0,0.65);overflow:hidden;display:flex;flex-direction:column;animation:modalIn .22s cubic-bezier(0.16,1,0.3,1) both}
+  @keyframes modalIn{from{opacity:0;transform:translate(-50%,-47%) scale(0.96)}to{opacity:1;transform:translate(-50%,-50%) scale(1)}}
+  .modal-hero{height:210px;position:relative;overflow:hidden;flex-shrink:0;background:var(--bg-frame)}
+  .modal-hero-img{width:100%;height:100%;object-fit:cover;display:block}
+  .modal-hero-fade{position:absolute;inset:0;background:linear-gradient(180deg,rgba(0,0,0,0.05) 0%,rgba(0,0,0,0.55) 100%)}
+  .modal-hero-empty{width:100%;height:100%;display:flex;align-items:center;justify-content:center;position:relative;overflow:hidden}
+  .modal-hero-bg{position:absolute;inset:-20px;background-size:cover;background-position:center;filter:blur(30px) saturate(1.4);opacity:.3;transform:scale(1.1)}
+  .modal-hero-icon{width:72px;height:72px;object-fit:contain;position:relative;z-index:1;filter:drop-shadow(0 8px 20px rgba(0,0,0,0.4))}
+  .modal-close{position:absolute;top:10px;right:10px;width:28px;height:28px;border-radius:50%;background:rgba(0,0,0,0.50);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;color:rgba(255,255,255,0.85);font-size:11px;cursor:pointer;transition:all .15s;z-index:2}
+  .modal-close:hover{background:rgba(0,0,0,0.80);color:#fff}
+  .modal-body{padding:18px 20px 22px;overflow-y:auto;display:flex;flex-direction:column;gap:12px}
+  .modal-body::-webkit-scrollbar{width:3px}
+  .modal-body::-webkit-scrollbar-thumb{background:rgba(128,128,128,0.15);border-radius:2px}
+  .modal-header{display:flex;align-items:flex-start;gap:14px}
+  .modal-icon{width:56px;height:56px;border-radius:13px;object-fit:contain;flex-shrink:0}
+  .modal-info{flex:1;min-width:0}
+  .modal-name{font-size:20px;font-weight:700;color:var(--text-1)}
+  .modal-cat{font-size:11px;color:var(--text-3);margin-top:2px;margin-bottom:7px}
+  .modal-tags{display:flex;gap:5px;flex-wrap:wrap}
+  .tag{font-size:9px;font-weight:600;padding:2px 7px;border-radius:4px;background:var(--ibtn-bg);border:1px solid var(--border);color:var(--text-2);font-family:'DM Mono',monospace}
+  .tag.accent{background:rgba(124,111,255,0.12);border-color:rgba(124,111,255,0.30);color:var(--accent)}
+  .modal-cta{display:flex;flex-direction:column;gap:6px;align-items:flex-end;flex-shrink:0}
+  .modal-inst-row{display:flex;align-items:center;gap:5px;font-size:11px;font-weight:600;color:var(--green)}
+  .modal-desc{font-size:12px;color:var(--text-2);line-height:1.65}
+  .modal-field-row{display:flex;align-items:baseline;justify-content:space-between;gap:12px;padding:7px 0;border-bottom:1px solid var(--border)}
+  .mf-label{font-size:10px;color:var(--text-3);flex-shrink:0}
+  .mf-value{font-size:10px;color:var(--text-1);font-family:'DM Mono',monospace;word-break:break-all;text-align:right}
+  .modal-section-label{font-size:9px;font-weight:600;color:var(--text-3);text-transform:uppercase;letter-spacing:.08em;margin-top:4px}
+  .btn-install{padding:10px 22px;border-radius:9px;border:none;cursor:pointer;background:linear-gradient(135deg,var(--accent),var(--accent2));color:#fff;font-size:13px;font-weight:600;font-family:inherit;transition:opacity .15s}
+  .btn-install:hover{opacity:.88}
+  .btn-install:disabled{opacity:.45;cursor:not-allowed}
+  .btn-open{padding:7px 14px;border-radius:7px;font-size:11px;font-weight:600;background:var(--ibtn-bg);border:1px solid var(--border);color:var(--text-1);text-decoration:none;text-align:center;transition:all .15s}
+  .btn-open:hover{border-color:var(--border-hi)}
+  .btn-danger{padding:7px 14px;border-radius:7px;font-size:11px;font-weight:600;background:rgba(248,113,113,0.10);border:1px solid rgba(248,113,113,0.25);color:var(--red);cursor:pointer;font-family:inherit;transition:opacity .15s}
+  .btn-danger:hover{opacity:.8}
+  .btn-danger:disabled{opacity:.4;cursor:not-allowed}
+  .btn-secondary{padding:7px 14px;border-radius:7px;border:1px solid var(--border);background:var(--ibtn-bg);color:var(--text-2);font-size:11px;cursor:pointer;font-family:inherit}
+  .statusbar{display:flex;align-items:center;gap:10px;padding:7px 16px;border-top:1px solid var(--border);background:var(--bg-bar);flex-shrink:0;font-size:10px;color:var(--text-3);border-radius:0 0 10px 10px;font-family:'DM Mono',monospace}
+  .status-dot{width:6px;height:6px;border-radius:50%;background:var(--green);box-shadow:0 0 4px rgba(74,222,128,0.6)}
+  .status-sep{width:1px;height:10px;background:var(--border)}
+</style>
