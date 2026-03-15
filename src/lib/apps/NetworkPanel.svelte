@@ -585,10 +585,9 @@
 
     <!-- ══ CERTS ══ -->
     {:else if activeSub === 'certs'}
-      {@const sslInfo = certData.ssl || {}}
 
       <!-- Request form — only when no valid cert -->
-      {#if !sslInfo.valid}
+      {#if !certData.ssl?.valid}
         <div class="section-label">SSL Certificate</div>
 
         {#if certDomain}
@@ -616,12 +615,12 @@
       {/if}
 
       <!-- Cert details — always shown when valid -->
-      {#if sslInfo.valid}
+      {#if certData.ssl?.valid}
         <div class="section-label">Certificado activo</div>
         <div class="cert-card">
           <div class="cert-card-header">
             <div class="cert-dot" style="background:var(--green)"></div>
-            <span class="cert-card-status">Valid · {sslInfo.daysLeft ?? '?'}d left</span>
+            <span class="cert-card-status">Válido · {certData.ssl?.daysLeft ?? '?'} días restantes</span>
             <!-- svelte-ignore a11y_click_events_have_key_events -->
             <!-- svelte-ignore a11y_no_static_element_interactions -->
             <span class="cert-refresh" on:click={requestCert} title="Renovar">
@@ -638,20 +637,20 @@
 
           <div class="cert-card-grid">
             <div class="cert-cell">
-              <span class="cert-cell-label">Domain</span>
-              <span class="cert-cell-value">{sslInfo.domain || certDomain}</span>
+              <span class="cert-cell-label">Dominio</span>
+              <span class="cert-cell-value">{certData.ssl?.domain || certDomain}</span>
             </div>
             <div class="cert-cell">
-              <span class="cert-cell-label">Expires</span>
-              <span class="cert-cell-value">{sslInfo.expiry || '—'}</span>
+              <span class="cert-cell-label">Expira</span>
+              <span class="cert-cell-value">{certData.ssl?.expiry || '—'}</span>
             </div>
             <div class="cert-cell">
-              <span class="cert-cell-label">Issuer</span>
+              <span class="cert-cell-label">Emisor</span>
               <span class="cert-cell-value">Let's Encrypt</span>
             </div>
             <div class="cert-cell">
-              <span class="cert-cell-label">Path</span>
-              <span class="cert-cell-value" style="font-size:9px">{sslInfo.certPath || '—'}</span>
+              <span class="cert-cell-label">Renovación</span>
+              <span class="cert-cell-value">Automática (certbot)</span>
             </div>
           </div>
         </div>
