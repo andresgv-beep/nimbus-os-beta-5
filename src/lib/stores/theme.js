@@ -11,6 +11,7 @@ const ACCENT_COLORS = {
 const DEFAULTS = {
   theme: 'dark', accentColor: 'orange', customAccentColor: '#E95420',
   glowIntensity: 50, taskbarSize: 'medium', taskbarPosition: 'bottom',
+  taskbarMode: 'classic',
   autoHideTaskbar: false, clock24: true, showDesktopIcons: true,
   textScale: 100, wallpaper: '', showWidgets: true, widgetMode: 'dynamic',
   widgetScale: 100, pinnedApps: ['files', 'appstore', 'nimsettings'],
