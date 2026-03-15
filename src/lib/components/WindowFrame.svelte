@@ -106,7 +106,11 @@
 
   <!-- App content — fills entire window -->
   <div class="content">
-    {#if win.appId === 'files'}
+    {#if win.isWebApp && win.webAppPort}
+      {#await import('$lib/apps/WebApp.svelte') then module}
+        <svelte:component this={module.default} appId={win.appId} port={win.webAppPort} name={win.webAppName} />
+      {/await}
+    {:else if win.appId === 'files'}
       {#await import('$lib/apps/FileManager.svelte') then module}
         <svelte:component this={module.default} />
       {/await}
