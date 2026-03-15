@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -1009,18 +1010,26 @@ func handleUpdateApply(w http.ResponseWriter) {
 	}
 	os.MkdirAll("/var/log/nimbusos", 0755)
 	os.Remove("/var/log/nimbusos/update-result.json")
-	go func() {
-		logFile, err := os.OpenFile("/var/log/nimbusos/update.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-		if err != nil {
-			return
-		}
-		defer logFile.Close()
-		cmd := exec.Command("bash", script)
+
+	// Launch update in a fully detached process so it survives daemon restart.
+	// The script does "systemctl stop/restart nimos-daemon" which kills us,
+	// so the child must be in its own session (setsid) to not receive our SIGTERM.
+	cmd := exec.Command("setsid", "bash", script)
+	cmd.Dir = "/opt/nimbusos"
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Setpgid: true,
+	}
+	// Redirect stdout/stderr to log file
+	logFile, err := os.OpenFile("/var/log/nimbusos/update.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err == nil {
 		cmd.Stdout = logFile
 		cmd.Stderr = logFile
-		cmd.Dir = "/opt/nimbusos"
-		cmd.Run()
-	}()
+	}
+	if err := cmd.Start(); err != nil {
+		jsonError(w, 500, fmt.Sprintf("Failed to start update: %v", err))
+		return
+	}
+	// Do NOT call cmd.Wait() — let the process run independently
 	jsonOk(w, map[string]interface{}{"ok": true, "message": "Update started."})
 }
 
