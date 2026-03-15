@@ -1,193 +1,151 @@
 # NimOS Beta 5 — Estado y Pendientes
 
-## Fecha: 2026-03-15
-## Repo: NimOs-beta-5 (SvelteKit)
+## Fecha: 2026-03-15 (actualizado)
+## Repo: NimOs-beta-5
 
 ---
 
-## ✅ COMPLETADO
+## ✅ COMPLETADO HOY
 
-### Core OS (Svelte)
+### Flujo Docker/Apps (era prioridad alta)
+- [x] Launcher carga Docker apps desde `/api/docker/installed-apps`
+- [x] Launcher abre Docker apps en iframe (`isWebApp: true`)
+- [x] WebApp.svelte creado — iframe con loading/error/ready states
+- [x] WindowFrame detecta `win.isWebApp` y renderiza WebApp
+- [x] AppStore procesa env: `${CONFIG_PATH}`, `{RANDOM}`, `TZ`, `HOST_IP`
+- [x] AppStore endpoints correctos: `/api/docker/stack`, `installed-apps`, `DELETE stack/{id}`
+- [x] Docker install automático desde AppStore (timeout 300s)
+- [x] `ProtectSystem=false` en service para permitir instalar Docker
+- [x] Jellyfin e Immich instalados y corriendo en iframe dentro de NimOS
+
+### Backend fixes
+- [x] `docker.go` — install con context timeout + logging
+- [x] `storage.go` — appendFstab con fallback device path + no duplicados + nofail
+- [x] `AppStore.svelte` — response parsing `data.apps` (no array directo)
+- [x] fstab manual para el pool RAID1
+
+### Sesión anterior
 - [x] Stores: auth.js, theme.js, windows.js
-- [x] Login + SetupWizard
-- [x] Desktop + Taskbar + WindowFrame
-- [x] Controles de ventana propios (3 líneas colores)
-- [x] Drag + resize + minimize + maximize ventanas
-- [x] App loader dinámico en WindowFrame (files, settings, torrent, appstore)
-
-### Apps portadas (UI)
-- [x] FileManager (diseño mockup HTML)
-- [x] Settings (por Sonnet)
-- [x] NimTorrent (por Sonnet)
-- [x] AppStore — carga catálogo desde GitHub, muestra apps con screenshots
-
-### Backend (daemon Go)
-- [x] Docker install con timeout 300s + logging
-- [x] ProtectSystem=false en service (para poder instalar Docker)
-- [x] storage.go — appendFstab con fallback device path si UUID vacío
-- [x] AppStore endpoints corregidos: /api/docker/stack, /api/docker/installed-apps, DELETE /api/docker/stack/{id}
-- [x] AppStore.svelte — response parsing fijo (data.apps vs array directo)
+- [x] Login + SetupWizard + Desktop + Taskbar + WindowFrame
+- [x] Controles ventana propios (3 líneas colores)
+- [x] Drag + resize + minimize + maximize
+- [x] FileManager, Settings, NimTorrent, AppStore portados
 
 ---
 
-## ❌ PENDIENTE — FLUJO DOCKER/APPS (PRIORIDAD ALTA)
+## 🔴 PENDIENTE — BUGS ACTIVOS (próxima sesión)
 
-### 1. Launcher (cajón de apps)
-**En beta 4:** `Launcher.jsx` — carga `/api/docker/installed-apps`, muestra Docker apps junto a las del sistema en un grid. Al click abre ventana con iframe.
+### 1. Carpeta docker/data/containers no se crea automáticamente
+**Problema:** Docker compose falla con "no such file or directory" al crear containers porque `/nimbus/pools/volume/docker/data/containers/` no existe.
+**Fix:** En `dockerInstall()` de docker.go, después de crear las carpetas, añadir:
+```go
+os.MkdirAll(filepath.Join(dockerDataPath, "containers"), 0755)
+```
+**Archivo:** `daemon/docker.go` línea ~651
 
-**En beta 5:** NO EXISTE. Solo hay Taskbar con pinned apps.
+### 2. Ruteamiento iframe vs pestaña
+**Problema:** Algunas apps se abren en iframe pero no en pestaña externa, y viceversa. Apps que bloquean iframe (X-Frame-Options: DENY) deberían tener `external: true` en el catálogo.
+**Fix:** 
+- Revisar cada app en `catalog.json` y marcar `"external": true` las que bloquean iframe
+- En WebApp.svelte: si iframe falla por X-Frame-Options, auto-abrir en pestaña
+- En Launcher: apps `external` abren directo en `window.open()` (ya implementado)
+**Archivos:** `catalog.json` (repo appstore), `src/lib/apps/WebApp.svelte`
 
-**Necesita:**
-- [ ] Crear `Launcher.svelte` — grid de apps (sistema + Docker instaladas)
-- [ ] Botón en Taskbar para abrir Launcher (o click derecho en desktop)
-- [ ] Launcher carga `/api/docker/installed-apps` y muestra iconos
-- [ ] Click en Docker app → `openWindow(id, size, {isWebApp:true, port, appName})`
-- [ ] Click en app del sistema → `openWindow(id)`
+### 3. Apps que dejaron de funcionar
+**Problema:** Algunas apps que funcionaban antes ya no van.
+**Necesita:** Testear cada app instalada, identificar errores en consola (F12), arreglar caso por caso.
+**Posibles causas:** puertos mal mapeados, env variables faltantes, contenedores caídos.
 
-### 2. WebApp iframe
-**En beta 4:** `WebApp.jsx` — iframe a `http://hostname:port` con loading/error states.
+### 4. Docker share — permisos de lectura/escritura
+**Problema:** El share "docker" muestra "0 items" porque las carpetas son propiedad de root.
+**Fix:** 
+- En `dockerInstall()`: crear share automático "docker" apuntando al pool
+- Permisos: `chmod -R 755` en carpetas docker excepto `data/` (interna de Docker)
+- Solo mostrar carpetas relevantes al usuario: `containers/`, `stacks/`, `volumes/`
+**Archivo:** `daemon/docker.go`
 
-**En beta 5:** NO EXISTE.
-
-**Necesita:**
-- [ ] Crear `WebApp.svelte` — iframe a `http://{hostname}:{port}`
-- [ ] Pre-check con fetch no-cors antes de mostrar iframe
-- [ ] Estados: loading spinner, error con retry + abrir externo, ready con iframe
-- [ ] Sandbox: allow-same-origin allow-scripts allow-forms allow-popups
-
-### 3. WindowFrame — soporte WebApp
-**En beta 4:** WindowFrame detecta `win.isWebApp` y renderiza `<WebApp>` en vez de app nativa.
-
-**En beta 5:** WindowFrame NO maneja isWebApp.
-
-**Necesita:**
-- [ ] Añadir `{:else if win.isWebApp}` en WindowFrame → renderizar WebApp.svelte
-- [ ] Pasar `win.webAppPort`, `win.webAppName` al componente
-
-### 4. AppStore install flow completo
-**En beta 4:** Install wizard con progreso, procesamiento de env ({RANDOM}, ${CONFIG_PATH}), credenciales post-install.
-
-**En beta 5:** Install básico sin procesamiento de env ni credenciales.
-
-**Necesita:**
-- [ ] Procesar env: `{RANDOM}` → password generado, `${CONFIG_PATH}` → path del stack
-- [ ] Mostrar progreso durante instalación (descargando, iniciando...)
-- [ ] Mostrar credenciales post-install si la app las define en el catálogo
-- [ ] Refrescar lista de installed apps después de instalar
-
-### 5. Docker share automático
-**En beta 4:** Al instalar Docker se creaba acceso a la carpeta docker del pool.
-
-**En beta 5:** NO se crea share automático.
-
-**Necesita:**
-- [ ] En `dockerInstall()` de docker.go: crear share "docker" apuntando a `{pool}/docker`
-- [ ] Permisos rw para admin en la carpeta docker y subcarpetas
-
-### 6. Taskbar — Docker apps
-**En beta 4:** Taskbar también cargaba `/api/docker/installed-apps` y mostraba iconos de apps corriendo.
-
-**En beta 5:** Taskbar solo muestra pinned apps del sistema.
-
-**Necesita:**
-- [ ] Taskbar carga Docker apps instaladas
-- [ ] Muestra iconos de apps Docker corriendo al lado de las del sistema
+### 5. fstab automático — storage.go
+**Problema:** Al crear pool RAID, `blkid` puede no devolver UUID para md devices recién creados.
+**Fix:** Ya arreglado con fallback a device path, pendiente de verificar en instalación limpia.
 
 ---
 
-## ❌ PENDIENTE — CONTAINERS APP
+## 🟡 PENDIENTE — FUNCIONALIDAD (siguiente fase)
 
-### 7. Containers manager
-**En beta 4:** App Containers mostraba contenedores corriendo con controles (start/stop/restart/logs).
+### 6. Containers manager
+- [ ] Crear `Containers.svelte` — lista contenedores con start/stop/restart
+- [ ] Endpoint: `/api/docker/status` → `containers[]`
+- [ ] Acciones: `/api/docker/container/{id}/{action}`
+- [ ] Logs de contenedores
 
-**En beta 5:** NO EXISTE (placeholder "Coming soon").
+### 7. AppStore — install wizard mejorado
+- [ ] Barra de progreso durante instalación
+- [ ] Credenciales post-install (definidas en catalog.json)
+- [ ] Refrescar launcher/taskbar después de instalar
 
-**Necesita:**
-- [ ] Crear `Containers.svelte` 
-- [ ] Lista de contenedores desde `/api/docker/status` (containers array)
-- [ ] Acciones: start, stop, restart, remove por contenedor
-- [ ] Logs: `/api/docker/container/{id}/logs`
-- [ ] Estado con colores (running=verde, stopped=rojo)
+### 8. Taskbar — Docker apps
+- [ ] Taskbar carga apps Docker instaladas
+- [ ] Iconos de apps corriendo junto a las del sistema
 
 ---
 
-## ❌ PENDIENTE — POLISH Y OTROS
+## 🔵 PENDIENTE — POLISH (futuro)
 
-### 8. Temas y scaling
-- [ ] CSS tokens globales para los 3 temas (midnight/dark/light) en app.css
-- [ ] Accent color dinámico desde theme store
-- [ ] Scaling responsive para 1080p / 1440p / 4K
+### 9. Temas y scaling
+- [ ] CSS tokens globales para midnight/dark/light
+- [ ] Accent color dinámico
+- [ ] Scaling para 1080p / 1440p / 4K
 
-### 9. Widgets
-- [ ] Clock, DiskPool, SystemMonitor, Network, NimTorrent widgets
-- [ ] Widget grid en desktop
+### 10. Widgets desktop
+- [ ] Clock, DiskPool, SystemMonitor, Network, NimTorrent
 
-### 10. Media Player
-- [ ] Portar MediaPlayer a Svelte
+### 11. Apps por portar
+- [ ] MediaPlayer, SystemMonitor, Context menus
 
-### 11. System Monitor
-- [ ] Portar SystemMonitor a Svelte
-
-### 12. Context menus
-- [ ] Click derecho en desktop → menú contextual
-- [ ] Click derecho en archivos → opciones (copiar, mover, renombrar, borrar)
-
-### 13. Limpieza repo
+### 12. Limpieza repo
 - [ ] Borrar `src/components/` (duplicado viejo)
-- [ ] Actualizar URLs en catalog.json (nimbusos-appstore → NimOs-appstore)
-- [ ] Borrar archivos sobrantes de la raíz (docker.go, http.go viejos)
+- [ ] Actualizar URLs en catalog.json
+- [ ] Sincronizar repo con archivos del NAS
 
 ---
 
-## ARCHIVOS CLAVE — Referencia
+## ARCHIVOS MODIFICADOS HOY
 
-### Beta 5 (Svelte)
 ```
-src/routes/+page.svelte          — Entry point
-src/lib/stores/auth.js           — Auth store
-src/lib/stores/theme.js          — Theme/prefs store  
-src/lib/stores/windows.js        — Window manager store
-src/lib/apps.js                  — App metadata (icons, sizes)
-src/lib/components/Desktop.svelte
-src/lib/components/Taskbar.svelte
-src/lib/components/WindowFrame.svelte
-src/lib/components/Login.svelte
-src/lib/components/SetupWizard.svelte
-src/lib/apps/FileManager.svelte
-src/lib/apps/Settings.svelte
-src/lib/apps/NimTorrent.svelte
-src/lib/apps/AppStore.svelte
+NUEVOS:
+  src/lib/apps/WebApp.svelte
+
+MODIFICADOS:
+  src/lib/apps/AppStore.svelte
+  src/lib/components/WindowFrame.svelte
+  src/lib/components/Launcher.svelte
+  daemon/docker.go
+  daemon/storage.go
+  scripts/nimos-daemon.service
 ```
 
-### Daemon Go
-```
-daemon/main.go      — Startup, socket, monitoring
-daemon/http.go      — HTTP routes
-daemon/auth.go      — Login, users, prefs
-daemon/docker.go    — Docker install, stacks, containers
-daemon/storage.go   — RAID pools, disks, fstab
-daemon/files.go     — File manager API
-daemon/network.go   — DDNS, SSL, services
-daemon/apps.go      — Native/installed apps
-daemon/shares.go    — Shared folders
-daemon/hardware.go  — CPU/GPU/temps/disks
-```
+## COMANDOS ÚTILES
 
-### Endpoints Docker
-```
-GET  /api/docker/status          — Docker + containers status
-POST /api/docker/install         — Install Docker engine
-GET  /api/docker/installed-apps  — List installed apps (returns {apps:[...]})
-POST /api/docker/stack           — Deploy stack (compose)
-DELETE /api/docker/stack/{id}    — Remove stack
-GET  /api/docker/containers      — List containers
-POST /api/docker/container/{id}/{action} — start/stop/restart
-```
+```bash
+# Recompilar daemon
+cd /opt/nimbusos/daemon
+sudo go mod tidy && sudo go build -o /tmp/nimos-daemon .
+sudo systemctl stop nimos-daemon
+sudo cp /tmp/nimos-daemon /opt/nimbusos/daemon/nimos-daemon
+sudo systemctl start nimos-daemon
 
-### Repo AppStore
-```
-https://github.com/andresgv-beep/NimOs-appstore
-├── catalog.json    — App definitions
-├── icons/          — SVG icons
-└── screenshots/    — App screenshots
+# Recompilar frontend
+cd /opt/nimbusos && npm run build
+
+# Logs
+sudo tail -f /var/log/nimbusos/daemon-error.log
+sudo tail -f /var/log/nimbusos/daemon.log
+
+# Docker
+docker ps
+docker logs jellyfin
+
+# Test endpoints (F12 Console)
+fetch('/api/docker/status', {headers:{'Authorization':'Bearer '+localStorage.getItem('nimbusos_token')}}).then(r=>r.json()).then(console.log)
+fetch('/api/docker/installed-apps', {headers:{'Authorization':'Bearer '+localStorage.getItem('nimbusos_token')}}).then(r=>r.json()).then(console.log)
 ```
