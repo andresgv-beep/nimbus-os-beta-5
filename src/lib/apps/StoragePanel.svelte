@@ -7,6 +7,7 @@
   let loading = true;
   let pools = [];
   let eligible = [];
+  let provisioned = [];
   let nvme = [];
   let selectedDisk = null;
 
@@ -39,9 +40,10 @@
       ]);
       const status = await statusRes.json();
       const disks  = await disksRes.json();
-      pools    = status.pools    || [];
-      eligible = disks.eligible  || [];
-      nvme     = disks.nvme      || [];
+      pools       = status.pools       || [];
+      eligible    = disks.eligible     || [];
+      provisioned = disks.provisioned  || [];
+      nvme        = disks.nvme         || [];
     } catch (e) {
       console.error('[Storage] load failed', e);
     }
@@ -50,7 +52,7 @@
 
   onMount(load);
 
-  $: totalBytes = [...eligible, ...nvme].reduce((a, d) => a + (d.size || 0), 0);
+  $: totalBytes = [...eligible, ...provisioned, ...nvme].reduce((a, d) => a + (d.size || 0), 0);
   $: usedBytes  = pools.reduce((a, p) => a + (p.used || 0), 0);
   $: usedPct    = totalBytes > 0 ? (usedBytes / totalBytes) * 100 : 0;
 
@@ -150,7 +152,8 @@
     } catch (e) { alert('Error de conexión'); }
   }
 
-  $: hddSlots  = Array.from({ length: 4 }, (_, i) => eligible[i] || null);
+  $: allHddDisks = [...provisioned.filter(d => !d.name?.startsWith('nvme')), ...eligible];
+  $: hddSlots  = Array.from({ length: Math.max(4, allHddDisks.length) }, (_, i) => allHddDisks[i] || null);
   $: nvmeSlots = Array.from({ length: 2 }, (_, i) => nvme[i]      || null);
 </script>
 
@@ -310,12 +313,15 @@
         <div class="section-label">Pools activos</div>
         {#each pools as pool}
           <div class="pool-row">
-            <div class="pool-led" class:healthy={pool.health === 'ONLINE'}></div>
+            <div class="pool-led" class:healthy={pool.status === 'active'}></div>
             <div class="pool-info">
-              <div class="pool-name">{pool.name}</div>
-              <div class="pool-meta">{pool.raidLevel || pool.type || 'RAID'} · {pool.mountpoint || '—'} · {fmt(pool.size)}</div>
+              <div class="pool-name">
+                {pool.name}
+                {#if pool.isPrimary}<span class="pool-primary">(principal)</span>{/if}
+              </div>
+              <div class="pool-meta">{pool.raidLevel || 'single'} · {pool.mountPoint || '—'} · {pool.totalFormatted || fmt(pool.total)}</div>
             </div>
-            <div class="pool-badge" class:green={pool.health === 'ONLINE'}>{pool.health || '—'}</div>
+            <div class="pool-badge" class:green={pool.status === 'active'}>{pool.status || '—'}</div>
             <!-- svelte-ignore a11y_click_events_have_key_events -->
             <!-- svelte-ignore a11y_no_static_element_interactions -->
             <span class="pool-destroy" on:click={() => destroyPool(pool.name)} title="Eliminar pool">✕</span>
@@ -327,16 +333,16 @@
       <!-- Available disks -->
       <div class="section-label">Discos disponibles</div>
       <div class="disk-card-list">
-        {#each [...eligible, ...nvme] as disk}
+        {#each [...provisioned, ...eligible, ...nvme] as disk}
           <div class="disk-card">
             <div class="disk-card-info">
-              <div class="disk-card-led" style="background:{disk.provisioned ? 'var(--green)' : 'var(--text-3)'}"></div>
+              <div class="disk-card-led" style="background:{disk.classification === 'provisioned' ? 'var(--green)' : 'var(--text-3)'}"></div>
               <div class="disk-card-name">{disk.name}</div>
               <div class="disk-card-model">{disk.model || '—'}</div>
               <div class="disk-card-size">{fmt(disk.size)}</div>
               <div class="disk-card-status">
-                {#if disk.provisioned}
-                  <span class="disk-tag green">En pool</span>
+                {#if disk.classification === 'provisioned'}
+                  <span class="disk-tag green">En pool{disk.poolName ? `: ${disk.poolName}` : ''}</span>
                 {:else if disk.partitions?.length > 0}
                   <span class="disk-tag amber">Con particiones</span>
                 {:else}
@@ -344,14 +350,14 @@
                 {/if}
               </div>
             </div>
-            {#if !disk.provisioned}
+            {#if disk.classification !== 'provisioned'}
               <button class="disk-wipe-btn" on:click={() => wipeDisk(disk.name)} disabled={wiping === disk.name}>
                 {wiping === disk.name ? '...' : 'Wipe'}
               </button>
             {/if}
           </div>
         {/each}
-        {#if eligible.length === 0 && nvme.length === 0}
+        {#if eligible.length === 0 && provisioned.length === 0 && nvme.length === 0}
           <p class="coming-soon">No se detectaron discos</p>
         {/if}
       </div>
@@ -432,11 +438,12 @@
       {#if pools.length > 0}
         {#each pools as pool}
           <div class="pool-row">
-            <div class="pool-led" class:healthy={pool.health === 'ONLINE'}></div>
+            <div class="pool-led" class:healthy={pool.status === 'active'}></div>
             <div class="pool-info">
               <div class="pool-name">{pool.name}</div>
-              <div class="pool-meta">{pool.raidLevel || '—'} · {pool.health || '—'}</div>
+              <div class="pool-meta">{pool.raidLevel || '—'} · {pool.status || '—'} · {pool.usagePercent ?? 0}% usado</div>
             </div>
+            <div class="pool-badge" class:green={pool.status === 'active'}>{pool.status || '—'}</div>
           </div>
         {/each}
       {:else}
