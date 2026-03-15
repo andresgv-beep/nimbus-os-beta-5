@@ -49,7 +49,7 @@
   <!-- SIDEBAR — always flat, no drill-down -->
   <div class="sidebar">
     <div class="sb-header">
-      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--accent);flex-shrink:0">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--text-1);flex-shrink:0">
         <rect x="2" y="3" width="9" height="9" rx="2"/><rect x="13" y="3" width="9" height="9" rx="2"/>
         <rect x="2" y="13" width="9" height="9" rx="2"/><rect x="13" y="13" width="9" height="9" rx="2"/>
       </svg>
@@ -262,7 +262,7 @@
   }
   .sb-header {
     display:flex; align-items:center; gap:9px;
-    padding:18px 10px 14px;
+    padding:28px 10px 14px;
   }
   .sb-app-title { font-size:16px; font-weight:700; color:var(--text-1); }
 

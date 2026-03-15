@@ -394,12 +394,7 @@
           </div>
         </div>
         <span style="font-size:9px;color:var(--text-3);margin-top:4px;display:block">Default: 5009</span>
-        {#if httpsEnabled && certDomain}
-          <div class="https-url" style="margin-top:14px">🔒 https://{certDomain}:{httpsPort}</div>
-          <div style="font-size:10px;color:var(--text-3);margin-top:8px">
-            Asegúrate de redirigir el puerto <strong style="color:var(--text-1)">{httpsPort}</strong> en tu router.
-          </div>
-        {/if}
+
         <div class="section-label" style="margin-top:24px">Detalles de conexión</div>
         <div class="cert-details">
           <div class="cert-row"><span class="cert-label">Local</span><span class="cert-value">http://{localIp || '—'}:5000</span></div>
