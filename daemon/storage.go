@@ -764,6 +764,15 @@ func wipeDiskGo(diskPath string) map[string]interface{} {
 		return map[string]interface{}{"error": "Cannot wipe the boot disk"}
 	}
 
+	// Unmount all partitions of this disk first
+	partitions, _ := run(fmt.Sprintf("lsblk -ln -o NAME %s 2>/dev/null | tail -n +2", diskPath))
+	for _, p := range strings.Fields(partitions) {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			run(fmt.Sprintf("umount /dev/%s 2>/dev/null || true", p))
+		}
+	}
+
 	// Stop any mdadm arrays using this disk
 	if mdstat, err := os.ReadFile("/proc/mdstat"); err == nil {
 		diskBase := diskPath[strings.LastIndex(diskPath, "/")+1:]
@@ -782,22 +791,33 @@ func wipeDiskGo(diskPath string) map[string]interface{} {
 
 	// Zero mdadm superblock on disk and all partitions
 	run(fmt.Sprintf("mdadm --zero-superblock %s 2>/dev/null || true", diskPath))
-	partitions, _ := run(fmt.Sprintf("lsblk -ln -o NAME %s 2>/dev/null | tail -n +2", diskPath))
-	for _, p := range strings.Fields(partitions) {
+	partitions2, _ := run(fmt.Sprintf("lsblk -ln -o NAME %s 2>/dev/null | tail -n +2", diskPath))
+	for _, p := range strings.Fields(partitions2) {
 		p = strings.TrimSpace(p)
 		if p != "" {
 			run(fmt.Sprintf("mdadm --zero-superblock /dev/%s 2>/dev/null || true", p))
-			run(fmt.Sprintf("umount /dev/%s 2>/dev/null || true", p))
 		}
 	}
 
 	// Wipe filesystem signatures and partition table
-	run(fmt.Sprintf("wipefs -a %s 2>/dev/null || true", diskPath))
+	wipefs, wipeOk := run(fmt.Sprintf("wipefs -a %s 2>&1", diskPath))
+	if !wipeOk {
+		return map[string]interface{}{"error": fmt.Sprintf("wipefs failed on %s: %s", diskPath, wipefs)}
+	}
 	if _, ok := run("which sgdisk 2>/dev/null"); ok {
 		run(fmt.Sprintf("sgdisk -Z %s 2>/dev/null || true", diskPath))
 	}
 	run(fmt.Sprintf("dd if=/dev/zero of=%s bs=1M count=10 2>/dev/null || true", diskPath))
 	run(fmt.Sprintf("partprobe %s 2>/dev/null || true", diskPath))
+
+	// Verify: check that no partitions remain
+	time.Sleep(1 * time.Second)
+	run(fmt.Sprintf("partprobe %s 2>/dev/null || true", diskPath))
+	time.Sleep(500 * time.Millisecond)
+	verifyParts, _ := run(fmt.Sprintf("lsblk -ln -o NAME %s 2>/dev/null | tail -n +2", diskPath))
+	if strings.TrimSpace(verifyParts) != "" {
+		return map[string]interface{}{"error": fmt.Sprintf("Wipe completed but partitions still detected on %s. The disk may be in use or the kernel has not yet updated.", diskPath)}
+	}
 
 	return map[string]interface{}{"ok": true, "disk": diskPath}
 }
