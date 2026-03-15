@@ -28,6 +28,62 @@
   let shareMsg     = '';
   let shareMsgError = false;
 
+  // ── Users modal state ──
+  let editingUser = null;
+  let savingUser  = false;
+  let userMsg     = '';
+  let userMsgError = false;
+
+  function startNewUser() {
+    editingUser = { _isNew: true, username: '', password: '', role: 'user', description: '' };
+    userMsg = '';
+  }
+
+  function startEditUser(u) {
+    editingUser = { _isNew: false, username: u.username, password: '', role: u.role || 'user', description: u.description || '' };
+    userMsg = '';
+  }
+
+  async function saveUser() {
+    savingUser = true; userMsg = '';
+    try {
+      if (editingUser._isNew) {
+        if (!editingUser.username.trim()) { userMsg = 'Nombre de usuario requerido'; userMsgError = true; savingUser = false; return; }
+        if (!editingUser.password)        { userMsg = 'Contraseña requerida';        userMsgError = true; savingUser = false; return; }
+        const res = await fetch('/api/users', {
+          method: 'POST',
+          headers: { ...hdrs(), 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username: editingUser.username, password: editingUser.password, role: editingUser.role, description: editingUser.description }),
+        });
+        const d = await res.json();
+        if (d.error) { userMsg = d.error; userMsgError = true; savingUser = false; return; }
+      } else {
+        const body = { role: editingUser.role, description: editingUser.description };
+        if (editingUser.password) body.password = editingUser.password;
+        const res = await fetch(`/api/users/${editingUser.username}`, {
+          method: 'PUT',
+          headers: { ...hdrs(), 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const d = await res.json();
+        if (d.error) { userMsg = d.error; userMsgError = true; savingUser = false; return; }
+      }
+      editingUser = null;
+      loadTab('users');
+    } catch (e) { userMsg = 'Error de conexión'; userMsgError = true; }
+    savingUser = false;
+  }
+
+  async function deleteUser(username) {
+    if (!confirm(`¿Eliminar el usuario "${username}"?`)) return;
+    try {
+      const res = await fetch(`/api/users/${username}`, { method: 'DELETE', headers: hdrs() });
+      const d = await res.json();
+      if (d.ok) loadTab('users');
+      else alert(d.error || 'Error al eliminar');
+    } catch (e) { alert('Error de conexión'); }
+  }
+
   function startNewShare() {
     const defaultPool = pools.length > 0 ? pools[0].name : '';
     editingShare = {
@@ -210,10 +266,15 @@
                 <div class="user-role">{u.role || 'user'}</div>
               </div>
               <div class="user-badge" class:admin={u.role === 'admin'}>{u.role || 'user'}</div>
+              <div class="share-actions">
+                <button class="share-action-btn" on:click={() => startEditUser(u)} title="Editar">✎</button>
+                <button class="share-action-btn danger" on:click={() => deleteUser(u.username)} title="Eliminar">✕</button>
+              </div>
             </div>
           {/each}
         </div>
       {/if}
+      <button class="btn-accent" style="margin-top:14px" on:click={startNewUser}>+ Nuevo usuario</button>
 
     {:else if activeSub === 'sharefolders'}
       <div class="sub-tabs">
@@ -454,6 +515,57 @@
           {savingShare ? 'Guardando...' : editingShare._isNew ? 'Crear carpeta' : 'Guardar cambios'}
         </button>
       {/if}
+    </div>
+  </div>
+{/if}
+
+<!-- ══ MODAL — Nuevo / Editar usuario ══ -->
+{#if editingUser}
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div class="modal-overlay" on:click|self={() => editingUser = null}></div>
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title">{editingUser._isNew ? 'Nuevo usuario' : `Editar: ${editingUser.username}`}</div>
+      <!-- svelte-ignore a11y_click_events_have_key_events -->
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div class="modal-close" on:click={() => editingUser = null}>✕</div>
+    </div>
+    <div class="modal-body">
+      <div class="form-field">
+        <label class="form-label">Usuario <span style="color:var(--red)">*</span></label>
+        <input class="form-input" type="text" placeholder="nombre_usuario"
+          bind:value={editingUser.username} disabled={!editingUser._isNew} />
+      </div>
+      <div class="form-field">
+        <label class="form-label">
+          {editingUser._isNew ? 'Contraseña' : 'Nueva contraseña'}
+          {#if editingUser._isNew}<span style="color:var(--red)">*</span>{/if}
+        </label>
+        <input class="form-input" type="password"
+          placeholder={editingUser._isNew ? 'Mínimo 8 caracteres' : 'Dejar vacío para no cambiar'}
+          bind:value={editingUser.password} />
+      </div>
+      <div class="form-field">
+        <label class="form-label">Rol</label>
+        <select class="form-select" bind:value={editingUser.role}>
+          <option value="user">Usuario</option>
+          <option value="admin">Administrador</option>
+        </select>
+      </div>
+      <div class="form-field">
+        <label class="form-label">Descripción</label>
+        <input class="form-input" type="text" placeholder="Opcional" bind:value={editingUser.description} />
+      </div>
+      {#if userMsg}
+        <div class="share-msg" class:error={userMsgError}>{userMsg}</div>
+      {/if}
+    </div>
+    <div class="modal-footer">
+      <button class="btn-secondary" on:click={() => editingUser = null}>Cancelar</button>
+      <button class="btn-accent" on:click={saveUser} disabled={savingUser}>
+        {savingUser ? 'Guardando...' : editingUser._isNew ? 'Crear usuario' : 'Guardar cambios'}
+      </button>
     </div>
   </div>
 {/if}
