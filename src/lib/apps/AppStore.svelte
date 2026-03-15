@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { getToken } from '$lib/stores/auth.js';
 
-  const CATALOG_URL = 'https://raw.githubusercontent.com/andresgv-beep/nimbusos-appstore/main/catalog.json';
+  const CATALOG_URL = 'https://raw.githubusercontent.com/andresgv-beep/NimOs-appstore/main/catalog.json';
   const hdrs = () => ({ 'Authorization': `Bearer ${getToken()}` });
 
   let catalog = null;
