@@ -371,32 +371,29 @@
         </div>
 
       {:else if activeSub === 'ports'}
-        <div class="section-label">HTTPS Server</div>
-        <div class="https-status-row">
-          <div>
-            <div class="https-title">Servir NimOS por HTTPS</div>
-            <div class="https-subtitle">Puerto {httpsPort}</div>
-          </div>
+        <div class="ports-status-bar">
+          <span class="ports-status-label">HTTPS Server</span>
           <div class="https-state" style="color:{httpsEnabled ? 'var(--green)' : 'var(--text-3)'}">
             <div class="ddns-dot" style="background:{httpsEnabled ? 'var(--green)' : 'var(--text-3)'}"></div>
             {httpsEnabled ? 'Running' : 'Stopped'}
           </div>
         </div>
-        <div class="form-field" style="max-width:160px;margin-top:14px">
-          <label class="form-label">HTTPS Port</label>
-          <input class="form-input" type="number" bind:value={httpsPort} placeholder="5009" />
-          <span style="font-size:9px;color:var(--text-3);margin-top:2px">Default: 5009</span>
-        </div>
-        <!-- svelte-ignore a11y_click_events_have_key_events -->
-        <!-- svelte-ignore a11y_no_static_element_interactions -->
-        <div class="https-toggle" on:click={() => toggleHttps(!httpsEnabled)} style="margin-top:14px">
-          <div class="toggle-track" class:on={httpsEnabled}>
-            <div class="toggle-thumb"></div>
+
+        <div class="section-label" style="margin-top:14px">HTTPS PORT</div>
+        <div class="port-inline-row">
+          <input class="form-input port-input" type="number" bind:value={httpsPort} placeholder="5009" />
+          <!-- svelte-ignore a11y_click_events_have_key_events -->
+          <!-- svelte-ignore a11y_no_static_element_interactions -->
+          <div class="https-toggle inline" on:click={() => toggleHttps(!httpsEnabled)}>
+            <div class="toggle-track" class:on={httpsEnabled}>
+              <div class="toggle-thumb"></div>
+            </div>
+            <span class="toggle-label">
+              {httpsEnabled ? `HTTPS activo en puerto ${httpsPort}` : `Activar HTTPS en puerto ${httpsPort}`}
+            </span>
           </div>
-          <span class="toggle-label">
-            {httpsEnabled ? `HTTPS activo en puerto ${httpsPort}` : `Activar HTTPS en puerto ${httpsPort}`}
-          </span>
         </div>
+        <span style="font-size:9px;color:var(--text-3);margin-top:4px;display:block">Default: 5009</span>
         {#if httpsEnabled && certDomain}
           <div class="https-url" style="margin-top:14px">🔒 https://{certDomain}:{httpsPort}</div>
           <div style="font-size:10px;color:var(--text-3);margin-top:8px">
@@ -926,5 +923,16 @@
     background:var(--active-bg); color:var(--text-1);
     border-color:var(--border-hi);
   }
+
+
+  /* ── PORT EXPOSURE ── */
+  .ports-status-bar {
+    display:flex; align-items:center; justify-content:space-between;
+    margin-bottom:4px;
+  }
+  .ports-status-label { font-size:9px; font-weight:600; color:var(--text-3); text-transform:uppercase; letter-spacing:.08em; }
+  .port-inline-row { display:flex; align-items:center; gap:12px; margin-top:4px; }
+  .port-input { max-width:140px; }
+  .https-toggle.inline { margin-top:0 !important; }
 
 </style>

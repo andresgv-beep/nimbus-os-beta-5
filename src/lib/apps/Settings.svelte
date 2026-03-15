@@ -48,12 +48,12 @@
 <div class="settings-root">
   <!-- SIDEBAR — always flat, no drill-down -->
   <div class="sidebar">
-    <div class="sb-user">
-      <div class="sb-avatar">{userName[0].toUpperCase()}</div>
-      <div class="sb-user-info">
-        <div class="sb-user-name">{userName}</div>
-        <div class="sb-user-role">{userRole}</div>
-      </div>
+    <div class="sb-header">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--accent);flex-shrink:0">
+        <rect x="2" y="3" width="9" height="9" rx="2"/><rect x="13" y="3" width="9" height="9" rx="2"/>
+        <rect x="2" y="13" width="9" height="9" rx="2"/><rect x="13" y="13" width="9" height="9" rx="2"/>
+      </svg>
+      <span class="sb-app-title">Settings</span>
     </div>
 
     <div class="sb-search">⌕ Buscar…</div>
@@ -83,11 +83,12 @@
     {/each}
 
     <div class="sb-bottom">
-      <!-- svelte-ignore a11y_click_events_have_key_events -->
-      <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div class="sb-item" on:click={logout}>
-        <span class="sb-ico">⏻</span>
-        Cerrar sesión
+      <div class="sb-user-card">
+        <div class="sb-avatar">{userName[0].toUpperCase()}</div>
+        <div class="sb-user-info">
+          <div class="sb-user-name">{userName}</div>
+          <div class="sb-user-role">{userRole}</div>
+        </div>
       </div>
     </div>
   </div>
@@ -259,9 +260,16 @@
     padding:12px 8px;
     background:var(--bg-sidebar);
   }
-  .sb-user {
+  .sb-header {
     display:flex; align-items:center; gap:9px;
-    padding:20px 8px 12px;
+    padding:18px 10px 14px;
+  }
+  .sb-app-title { font-size:16px; font-weight:700; color:var(--text-1); }
+
+  .sb-bottom { margin-top:auto; border-top:1px solid var(--border); padding-top:8px; }
+  .sb-user-card {
+    display:flex; align-items:center; gap:10px;
+    padding:10px 10px;
   }
   .sb-avatar {
     width:30px; height:30px; border-radius:8px; flex-shrink:0;
