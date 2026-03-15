@@ -764,10 +764,39 @@ func wipeDiskGo(diskPath string) map[string]interface{} {
 		return map[string]interface{}{"error": "Cannot wipe the boot disk"}
 	}
 
+	// Stop any mdadm arrays using this disk
+	if mdstat, err := os.ReadFile("/proc/mdstat"); err == nil {
+		diskBase := diskPath[strings.LastIndex(diskPath, "/")+1:]
+		lines := strings.Split(string(mdstat), "\n")
+		for _, line := range lines {
+			if strings.Contains(line, diskBase) {
+				parts := strings.Fields(line)
+				if len(parts) > 0 && strings.HasPrefix(parts[0], "md") {
+					mdDev := "/dev/" + parts[0]
+					run(fmt.Sprintf("umount %s 2>/dev/null || true", mdDev))
+					run(fmt.Sprintf("mdadm --stop %s 2>/dev/null || true", mdDev))
+				}
+			}
+		}
+	}
+
+	// Zero mdadm superblock on disk and all partitions
+	run(fmt.Sprintf("mdadm --zero-superblock %s 2>/dev/null || true", diskPath))
+	partitions, _ := run(fmt.Sprintf("lsblk -ln -o NAME %s 2>/dev/null | tail -n +2", diskPath))
+	for _, p := range strings.Fields(partitions) {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			run(fmt.Sprintf("mdadm --zero-superblock /dev/%s 2>/dev/null || true", p))
+			run(fmt.Sprintf("umount /dev/%s 2>/dev/null || true", p))
+		}
+	}
+
+	// Wipe filesystem signatures and partition table
 	run(fmt.Sprintf("wipefs -a %s 2>/dev/null || true", diskPath))
 	if _, ok := run("which sgdisk 2>/dev/null"); ok {
 		run(fmt.Sprintf("sgdisk -Z %s 2>/dev/null || true", diskPath))
 	}
+	run(fmt.Sprintf("dd if=/dev/zero of=%s bs=1M count=10 2>/dev/null || true", diskPath))
 	run(fmt.Sprintf("partprobe %s 2>/dev/null || true", diskPath))
 
 	return map[string]interface{}{"ok": true, "disk": diskPath}
