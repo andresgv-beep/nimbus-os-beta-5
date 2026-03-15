@@ -179,12 +179,27 @@
             <div class="section-label">Widgets del escritorio</div>
             <p style="color:var(--text-3);font-size:12px">Widget configuration — coming soon</p>
           {:else if appearanceTab === 'taskbar'}
-            <div class="section-label">Posición</div>
+            <div class="section-label">Modo</div>
+            <div class="setting-row">
+              <span class="setting-label">Estilo</span>
+              <div class="setting-options">
+                <button class="opt-btn" class:active={$prefs.taskbarMode === 'classic'} on:click={() => setPref('taskbarMode', 'classic')}>
+                  Clásico
+                </button>
+                <button class="opt-btn" class:active={$prefs.taskbarMode === 'dock'} on:click={() => setPref('taskbarMode', 'dock')}>
+                  Dock
+                </button>
+              </div>
+            </div>
+            <div class="section-label" style="margin-top:16px">Posición</div>
             <div class="setting-row">
               <span class="setting-label">Posición</span>
               <div class="setting-options">
                 {#each ['bottom', 'top', 'left'] as pos}
-                  <button class="opt-btn" class:active={$prefs.taskbarPosition === pos} on:click={() => setPref('taskbarPosition', pos)}>
+                  <button class="opt-btn"
+                    class:active={$prefs.taskbarPosition === pos}
+                    disabled={$prefs.taskbarMode === 'dock' && pos === 'left'}
+                    on:click={() => setPref('taskbarPosition', pos)}>
                     {pos === 'bottom' ? 'Abajo' : pos === 'top' ? 'Arriba' : 'Izquierda'}
                   </button>
                 {/each}
