@@ -219,6 +219,9 @@ func startHTTPServer() {
 	mux.HandleFunc("/api/torrent/", handleTorrentProxy)
 	mux.HandleFunc("/api/torrent", handleTorrentProxy)
 
+	// ── App reverse proxy (Docker apps via /app/{id}/) ──
+	mux.HandleFunc("/app/", handleAppProxy)
+
 	// ── Static file serving (frontend) — must be last ──
 	mux.HandleFunc("/", serveStatic)
 
