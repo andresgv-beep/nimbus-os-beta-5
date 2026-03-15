@@ -56,10 +56,10 @@
     dockerInstalling = true;
     dockerError = null;
     try {
-      const res = await fetch('/api/docker/install', {
-        method: 'POST',
-        headers: { ...hdrs(), 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
+      const res = await fetch('/api/docker/stack', {
+       method: 'POST',
+       headers: { ...hdrs(), 'Content-Type': 'application/json' },
+       body: JSON.stringify({ id: appId, name: app.name, compose: app.compose, icon: app.icon, port: app.port, env: app.env || {}, external: app.external || false }),
       });
       const data = await res.json();
       if (data.ok && data.dockerAvailable) {
