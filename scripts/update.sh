@@ -97,7 +97,7 @@ if [ "$DAEMON_CHANGED" = true ]; then
   if [ "$FRONTEND_CHANGED" = true ] && command -v npm &>/dev/null; then
     log "Frontend source also changed — rebuilding..."
     cd "$DIR"
-    npm install --omit=dev 2>&1 | tail -5 | tee -a "$LOG_FILE"
+    npm install 2>&1 | tail -5 | tee -a "$LOG_FILE"
     npm run build 2>&1 | tee -a "$LOG_FILE" || log "WARNING: Frontend build failed"
   fi
 
@@ -120,7 +120,7 @@ elif [ "$FRONTEND_CHANGED" = true ]; then
   log "Frontend source changed — rebuilding..."
   cd "$DIR"
   if command -v npm &>/dev/null; then
-    npm install --omit=dev 2>&1 | tail -5 | tee -a "$LOG_FILE"
+    npm install 2>&1 | tail -5 | tee -a "$LOG_FILE"
     if npm run build 2>&1 | tee -a "$LOG_FILE"; then
       log "Frontend rebuilt successfully"
     else
