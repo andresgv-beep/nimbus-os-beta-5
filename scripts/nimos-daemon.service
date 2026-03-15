@@ -16,7 +16,7 @@ RestartSec=3
 PrivateNetwork=false
 ProtectHome=true
 ProtectSystem=strict
-ReadWritePaths=/run /nimbus /var/lib/nimbusos /etc /home /tmp /var/tmp /var/log /var/cache
+ReadWritePaths=/run /nimbus /var/lib/nimbusos /etc /home /tmp /var/tmp /var/log /var/cache /opt/nimbusos /usr/local/bin
 NoNewPrivileges=false
 
 # Logging
