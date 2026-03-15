@@ -15,25 +15,85 @@
   let installing = {};
   let removing = {};
 
+  // Docker state
+  let dockerReady = false;
+  let dockerInstalling = false;
+  let dockerError = null;
+  let hasPool = false;
+
+  async function checkDocker() {
+    try {
+      // Check storage pool first
+      const poolRes = await fetch('/api/storage/status', { headers: hdrs() });
+      const poolData = await poolRes.json();
+      hasPool = poolData.hasPool === true || (poolData.pools?.length > 0);
+
+      if (!hasPool) {
+        loading = false;
+        return;
+      }
+
+      // Check docker status
+      const res = await fetch('/api/docker/status', { headers: hdrs() });
+      const data = await res.json();
+      
+      if (data.installed && data.dockerRunning) {
+        dockerReady = true;
+        await loadCatalog();
+      } else {
+        // Auto-install Docker
+        await installDocker();
+      }
+    } catch(e) {
+      console.error('[AppStore] Docker check failed:', e);
+      // Try loading catalog anyway
+      dockerReady = true;
+      await loadCatalog();
+    }
+  }
+
+  async function installDocker() {
+    dockerInstalling = true;
+    dockerError = null;
+    try {
+      const res = await fetch('/api/docker/install', {
+        method: 'POST',
+        headers: { ...hdrs(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      const data = await res.json();
+      if (data.ok && data.dockerAvailable) {
+        dockerReady = true;
+        await loadCatalog();
+      } else {
+        dockerError = data.error || 'Docker installation failed';
+        loading = false;
+      }
+    } catch(e) {
+      dockerError = 'Failed to install Docker: ' + e.message;
+      loading = false;
+    }
+    dockerInstalling = false;
+  }
+
   async function loadCatalog() {
     try {
-      const [catRes, contRes] = await Promise.all([
+      const [catRes, appsRes] = await Promise.all([
         fetch(CATALOG_URL),
-        fetch('/api/containers', { headers: hdrs() }).catch(() => ({ ok: false })),
+        fetch('/api/docker/installed-apps', { headers: hdrs() }).catch(() => ({ ok: false })),
       ]);
       catalog = await catRes.json();
-      if (contRes.ok) {
-        const containers = await contRes.json();
-        for (const [id, app] of Object.entries(catalog.apps)) {
-          const match = (containers || []).find(c =>
-            c.Names?.some(n => n.includes(id)) ||
-            c.Image?.includes(app.image?.split(':')[0])
-          );
-          if (match) installed[id] = { status: match.State || 'running', port: app.port };
+      if (appsRes.ok) {
+        const apps = await appsRes.json();
+        for (const app of (apps || [])) {
+          const id = app.id || app.name;
+          if (catalog.apps[id]) {
+            installed[id] = { status: 'running', port: catalog.apps[id].port };
+          }
         }
         installed = installed;
       }
-    } catch(e) { error = 'No se pudo cargar el catálogo'; }
+    } catch(e) { error = 'No se pudo cargar el catálogo'; console.error(e); }
     loading = false;
   }
 
@@ -42,13 +102,22 @@
     if (!app) return;
     installing = { ...installing, [appId]: true };
     try {
-      const res = await fetch('/api/apps/install', {
+      const res = await fetch('/api/docker/stack', {
         method: 'POST',
         headers: { ...hdrs(), 'Content-Type': 'application/json' },
-        body: JSON.stringify({ appId, compose: app.compose, env: app.env || {} }),
+        body: JSON.stringify({
+          id: appId,
+          name: app.name,
+          compose: app.compose,
+          icon: app.icon,
+          port: app.port,
+          env: app.env || {},
+          external: app.external || false,
+        }),
       });
       const d = await res.json();
       if (d.ok) installed = { ...installed, [appId]: { status: 'running', port: app.port } };
+      else alert(d.error || 'Installation failed');
     } catch(e) { console.error(e); }
     installing = { ...installing, [appId]: false };
   }
@@ -57,13 +126,13 @@
     if (!confirm(`¿Eliminar ${catalog.apps[appId]?.name}?`)) return;
     removing = { ...removing, [appId]: true };
     try {
-      await fetch(`/api/apps/${appId}`, { method: 'DELETE', headers: hdrs() });
+      await fetch(`/api/docker/stack/${appId}`, { method: 'DELETE', headers: hdrs() });
       const next = { ...installed }; delete next[appId]; installed = next;
     } catch(e) { console.error(e); }
     removing = { ...removing, [appId]: false };
   }
 
-  onMount(loadCatalog);
+  onMount(checkDocker);
 
   const CAT_ICONS = { media:'🎬', cloud:'☁', downloads:'⬇', homelab:'🏠', development:'⌨', security:'🔒', monitoring:'📊' };
 
@@ -86,7 +155,7 @@
   $: installedCount = Object.keys(installed).length;
 
   // Auto-screenshot: tries screenshots/{id}.png, falls back to icon on error
-  const SCREENSHOTS_BASE = 'https://raw.githubusercontent.com/andresgv-beep/nimbusos-appstore/main/screenshots';
+  const SCREENSHOTS_BASE = 'https://raw.githubusercontent.com/andresgv-beep/NimOs-appstore/main/screenshots';
   let failedScreenshots = new Set();
   function screenshotUrl(id) { return `${SCREENSHOTS_BASE}/${id}/preview.png`; }
   function onScreenshotError(id) { failedScreenshots.add(id); failedScreenshots = failedScreenshots; }
@@ -94,6 +163,36 @@
 </script>
 
 <div class="store-root">
+  {#if !hasPool && !loading}
+    <!-- No storage pool -->
+    <div class="setup-screen">
+      <div class="setup-icon">💾</div>
+      <h2>Storage Required</h2>
+      <p>The App Store needs a storage pool to install Docker apps.<br>Open <strong>NimSettings → Storage</strong> to create one.</p>
+    </div>
+  {:else if dockerInstalling}
+    <!-- Installing Docker -->
+    <div class="setup-screen">
+      <div class="spinner"></div>
+      <h2>Installing Docker...</h2>
+      <p>This may take a few minutes. Please wait.</p>
+    </div>
+  {:else if dockerError}
+    <!-- Docker install failed -->
+    <div class="setup-screen">
+      <div class="setup-icon">⚠️</div>
+      <h2>Docker Installation Failed</h2>
+      <p>{dockerError}</p>
+      <button class="btn-retry" on:click={installDocker}>Retry</button>
+    </div>
+  {:else if !dockerReady && !loading}
+    <!-- Docker not ready -->
+    <div class="setup-screen">
+      <div class="setup-icon">🐳</div>
+      <h2>Setting up Docker...</h2>
+      <p>Preparing the container engine.</p>
+    </div>
+  {:else}
   <div class="sidebar">
     <div class="sb-header">
       <svg class="sb-logo" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -267,6 +366,7 @@
     </div>
   </div>
 {/if}
+{/if}
 
 <style>
   .store-root{width:100%;height:100%;display:flex;overflow:hidden;font-family:'DM Sans',sans-serif;color:var(--text-1)}
@@ -357,4 +457,9 @@
   .statusbar{display:flex;align-items:center;gap:10px;padding:7px 16px;border-top:1px solid var(--border);background:var(--bg-bar);flex-shrink:0;font-size:10px;color:var(--text-3);border-radius:0 0 10px 10px;font-family:'DM Mono',monospace}
   .status-dot{width:6px;height:6px;border-radius:50%;background:var(--green);box-shadow:0 0 4px rgba(74,222,128,0.6)}
   .status-sep{width:1px;height:10px;background:var(--border)}
+  .setup-screen{width:100%;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;text-align:center;padding:40px}
+  .setup-screen h2{font-size:18px;font-weight:600;color:var(--text-1)}
+  .setup-screen p{font-size:13px;color:var(--text-2);line-height:1.6;max-width:400px}
+  .setup-icon{font-size:48px}
+  .btn-retry{padding:10px 22px;border-radius:9px;border:none;cursor:pointer;background:var(--accent);color:#fff;font-size:13px;font-weight:600;font-family:inherit}
 </style>
