@@ -122,6 +122,18 @@
       {#await import('$lib/apps/AppStore.svelte') then module}
         <svelte:component this={module.default} />
       {/await}
+    {:else if win.appId === 'monitor'}
+      {#await import('$lib/apps/SystemMonitor.svelte') then module}
+        <svelte:component this={module.default} />
+      {/await}
+    {:else if win.appId === 'containers'}
+      {#await import('$lib/apps/Containers.svelte') then module}
+        <svelte:component this={module.default} />
+      {/await}
+    {:else if win.appId === 'mediaplayer'}
+      {#await import('$lib/apps/MediaPlayer.svelte') then module}
+        <svelte:component this={module.default} />
+      {/await}
     {:else}
       <div class="placeholder">
         <span style="font-size:48px">{meta.icon}</span>
