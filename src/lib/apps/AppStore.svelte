@@ -293,6 +293,7 @@
       </div>
     </div>
   </div>
+  {/if}
 </div>
 
 {#if selectedApp}
@@ -365,7 +366,6 @@
       {/if}
     </div>
   </div>
-{/if}
 {/if}
 
 <style>
