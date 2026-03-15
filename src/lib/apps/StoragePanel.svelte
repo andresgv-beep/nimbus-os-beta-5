@@ -15,6 +15,10 @@
   let creating = false;
   let poolMsg = '';
   let poolMsgError = false;
+  let showCreatePool = false;
+  let wiping = null;
+  let wipeMsg = '';
+  let wipeMsgError = false;
 
   // Restore pool state
   let restorable = [];
@@ -115,6 +119,35 @@
       else { restoreMsg = data.error || 'Error restaurando'; restoreMsgError = true; }
     } catch (e) { restoreMsg = 'Error de conexión'; restoreMsgError = true; }
     restoring = false;
+  }
+
+  async function wipeDisk(name) {
+    if (!confirm(`¿Wipear /dev/${name}? Se borrarán TODAS las particiones.`)) return;
+    wiping = name; wipeMsg = '';
+    try {
+      const res = await fetch('/api/storage/wipe', {
+        method: 'POST',
+        headers: { ...hdrs(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ disk: `/dev/${name}` }),
+      });
+      const data = await res.json();
+      if (data.ok || data.error === undefined) { wipeMsg = `${name} wipeado correctamente`; wipeMsgError = false; load(); }
+      else { wipeMsg = data.error || 'Error'; wipeMsgError = true; }
+    } catch (e) { wipeMsg = 'Error de conexión'; wipeMsgError = true; }
+    wiping = null;
+  }
+
+  async function destroyPool(name) {
+    if (!confirm(`¿Destruir pool "${name}"? Esta acción no se puede deshacer.`)) return;
+    try {
+      const res = await fetch('/api/storage/pool/destroy', {
+        method: 'POST',
+        headers: { ...hdrs(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      });
+      const data = await res.json();
+      if (data.ok) { load(); } else { alert(data.error || 'Error'); }
+    } catch (e) { alert('Error de conexión'); }
   }
 
   $: hddSlots  = Array.from({ length: 4 }, (_, i) => eligible[i] || null);
@@ -271,80 +304,128 @@
       </div>
 
     {:else if activeTab === 'pools'}
-      <div class="section-label">Storage Manager</div>
 
+      <!-- Existing pools -->
       {#if pools.length > 0}
+        <div class="section-label">Pools activos</div>
         {#each pools as pool}
           <div class="pool-row">
             <div class="pool-led" class:healthy={pool.health === 'ONLINE'}></div>
             <div class="pool-info">
-              <div class="pool-name">{pool.name} {#if pool.primary}<span class="pool-primary">Primary</span>{/if}</div>
+              <div class="pool-name">{pool.name}</div>
               <div class="pool-meta">{pool.raidLevel || pool.type || 'RAID'} · {pool.mountpoint || '—'} · {fmt(pool.size)}</div>
             </div>
             <div class="pool-badge" class:green={pool.health === 'ONLINE'}>{pool.health || '—'}</div>
+            <!-- svelte-ignore a11y_click_events_have_key_events -->
+            <!-- svelte-ignore a11y_no_static_element_interactions -->
+            <span class="pool-destroy" on:click={() => destroyPool(pool.name)} title="Eliminar pool">✕</span>
           </div>
         {/each}
         <div class="pool-sep"></div>
       {/if}
 
-      <!-- Create pool form -->
-      <div class="section-label" style="margin-top:12px">Crear nuevo pool</div>
-
-      <div class="create-form">
-        <div class="form-field">
-          <label class="form-label">Nombre del pool</label>
-          <input class="form-input" type="text" placeholder="main-storage" bind:value={newPool.name} />
-        </div>
-
-        <div class="form-field">
-          <label class="form-label">Nivel RAID</label>
-          <select class="form-select" bind:value={newPool.level}>
-            <option value="single">Single (sin redundancia)</option>
-            <option value="0">RAID 0 (striping, 2+ discos)</option>
-            <option value="1">RAID 1 (mirror, 2 discos)</option>
-            <option value="5">RAID 5 (parity, 3+ discos)</option>
-            <option value="6">RAID 6 (dual parity, 4+ discos)</option>
-            <option value="10">RAID 10 (mirror+stripe, 4+ discos)</option>
-          </select>
-        </div>
-
-        <div class="form-field">
-          <label class="form-label">Filesystem</label>
-          <select class="form-select" bind:value={newPool.filesystem}>
-            <option value="ext4">ext4 (recomendado)</option>
-            <option value="xfs">XFS</option>
-          </select>
-        </div>
-
-        <div class="form-field">
-          <label class="form-label">Discos disponibles</label>
-          <div class="disk-select-list">
-            {#each eligible.filter(d => !d.provisioned) as disk}
-              <!-- svelte-ignore a11y_click_events_have_key_events -->
-              <!-- svelte-ignore a11y_no_static_element_interactions -->
-              <div class="disk-select-row" class:selected={newPool.disks.includes(disk.name)} on:click={() => toggleDiskSelect(disk.name)}>
-                <div class="dsr-check">{newPool.disks.includes(disk.name) ? '✓' : ''}</div>
-                <div class="dsr-name">{disk.name}</div>
-                <div class="dsr-model">{disk.model || '—'}</div>
-                <div class="dsr-size">{fmt(disk.size)}</div>
+      <!-- Available disks -->
+      <div class="section-label">Discos disponibles</div>
+      <div class="disk-card-list">
+        {#each [...eligible, ...nvme] as disk}
+          <div class="disk-card">
+            <div class="disk-card-info">
+              <div class="disk-card-led" style="background:{disk.provisioned ? 'var(--green)' : 'var(--text-3)'}"></div>
+              <div class="disk-card-name">{disk.name}</div>
+              <div class="disk-card-model">{disk.model || '—'}</div>
+              <div class="disk-card-size">{fmt(disk.size)}</div>
+              <div class="disk-card-status">
+                {#if disk.provisioned}
+                  <span class="disk-tag green">En pool</span>
+                {:else if disk.hasPartitions || disk.partitions}
+                  <span class="disk-tag amber">Con particiones</span>
+                {:else}
+                  <span class="disk-tag">Libre</span>
+                {/if}
               </div>
-            {/each}
-            {#if eligible.filter(d => !d.provisioned).length === 0}
-              <p class="coming-soon">No hay discos disponibles</p>
+            </div>
+            {#if !disk.provisioned}
+              <button class="disk-wipe-btn" on:click={() => wipeDisk(disk.name)} disabled={wiping === disk.name}>
+                {wiping === disk.name ? '...' : 'Wipe'}
+              </button>
             {/if}
           </div>
-        </div>
-
-        <div class="form-actions">
-          <button class="btn-accent" on:click={createPool} disabled={creating}>
-            {creating ? 'Creando...' : 'Crear Pool'}
-          </button>
-        </div>
-
-        {#if poolMsg}
-          <div class="pool-msg" class:error={poolMsgError}>{poolMsg}</div>
+        {/each}
+        {#if eligible.length === 0 && nvme.length === 0}
+          <p class="coming-soon">No se detectaron discos</p>
         {/if}
       </div>
+
+      {#if wipeMsg}
+        <div class="pool-msg" class:error={wipeMsgError} style="margin-top:8px">{wipeMsg}</div>
+      {/if}
+
+      <!-- Create Pool -->
+      <div class="pool-sep"></div>
+
+      {#if !showCreatePool}
+        <!-- svelte-ignore a11y_click_events_have_key_events -->
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div class="create-pool-btn" on:click={() => showCreatePool = true}>
+          + Crear Pool
+        </div>
+      {:else}
+        <div class="section-label">Crear nuevo pool</div>
+        <div class="create-form">
+          <div class="form-field">
+            <label class="form-label">Nombre</label>
+            <input class="form-input" type="text" placeholder="main-storage" bind:value={newPool.name} />
+          </div>
+
+          <div class="form-row">
+            <div class="form-field" style="flex:1">
+              <label class="form-label">RAID</label>
+              <select class="form-select" bind:value={newPool.level}>
+                <option value="single">Single</option>
+                <option value="0">RAID 0</option>
+                <option value="1">RAID 1</option>
+                <option value="5">RAID 5</option>
+                <option value="6">RAID 6</option>
+                <option value="10">RAID 10</option>
+              </select>
+            </div>
+            <div class="form-field" style="flex:1">
+              <label class="form-label">Filesystem</label>
+              <select class="form-select" bind:value={newPool.filesystem}>
+                <option value="ext4">ext4</option>
+                <option value="xfs">XFS</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="form-field">
+            <label class="form-label">Seleccionar discos</label>
+            <div class="disk-select-list">
+              {#each eligible.filter(d => !d.provisioned) as disk}
+                <!-- svelte-ignore a11y_click_events_have_key_events -->
+                <!-- svelte-ignore a11y_no_static_element_interactions -->
+                <div class="disk-select-row" class:selected={newPool.disks.includes(disk.name)} on:click={() => toggleDiskSelect(disk.name)}>
+                  <div class="dsr-check">{newPool.disks.includes(disk.name) ? '✓' : ''}</div>
+                  <div class="dsr-name">{disk.name}</div>
+                  <div class="dsr-model">{disk.model || '—'}</div>
+                  <div class="dsr-size">{fmt(disk.size)}</div>
+                </div>
+              {/each}
+            </div>
+          </div>
+
+          <div class="form-actions">
+            <button class="btn-accent" on:click={createPool} disabled={creating}>
+              {creating ? 'Creando...' : 'Crear Pool'}
+            </button>
+            <button class="btn-secondary" on:click={() => showCreatePool = false}>Cancelar</button>
+          </div>
+
+          {#if poolMsg}
+            <div class="pool-msg" class:error={poolMsgError}>{poolMsg}</div>
+          {/if}
+        </div>
+      {/if}
 
     {:else if activeTab === 'health'}
       <div class="section-label">Estado de salud</div>
@@ -489,6 +570,50 @@
   .pool-badge { margin-left:auto; padding:3px 8px; border-radius:20px; font-size:9px; font-weight:600; background:var(--ibtn-bg); border:1px solid var(--border); color:var(--text-2); }
   .pool-badge.green { background:rgba(74,222,128,0.10); border-color:rgba(74,222,128,0.25); color:var(--green); }
   .coming-soon { color:var(--text-3); font-size:12px; }
+
+  /* ── DISK CARDS ── */
+  .disk-card-list { display:flex; flex-direction:column; gap:4px; }
+  .disk-card {
+    display:flex; align-items:center; gap:8px;
+    padding:9px 12px; border-radius:8px;
+    border:1px solid var(--border); background:var(--ibtn-bg);
+  }
+  .disk-card-info { display:flex; align-items:center; gap:8px; flex:1; min-width:0; }
+  .disk-card-led { width:6px; height:6px; border-radius:50%; flex-shrink:0; }
+  .disk-card-name { font-size:12px; font-weight:600; color:var(--text-1); font-family:'DM Mono',monospace; flex-shrink:0; }
+  .disk-card-model { font-size:10px; color:var(--text-3); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .disk-card-size { font-size:11px; color:var(--text-2); font-family:'DM Mono',monospace; margin-left:auto; flex-shrink:0; }
+  .disk-card-status { flex-shrink:0; }
+  .disk-tag {
+    padding:2px 7px; border-radius:4px; font-size:9px; font-weight:600;
+    background:var(--ibtn-bg); border:1px solid var(--border); color:var(--text-3);
+    font-family:'DM Mono',monospace;
+  }
+  .disk-tag.green { background:rgba(74,222,128,0.10); border-color:rgba(74,222,128,0.25); color:var(--green); }
+  .disk-tag.amber { background:rgba(251,191,36,0.10); border-color:rgba(251,191,36,0.25); color:var(--amber); }
+
+  .disk-wipe-btn {
+    padding:4px 10px; border-radius:6px; border:1px solid rgba(248,113,113,0.25);
+    background:rgba(248,113,113,0.08); color:var(--red);
+    font-size:9px; font-weight:600; cursor:pointer; font-family:inherit;
+    transition:all .15s; flex-shrink:0;
+  }
+  .disk-wipe-btn:hover { background:rgba(248,113,113,0.15); }
+  .disk-wipe-btn:disabled { opacity:.5; cursor:not-allowed; }
+
+  .create-pool-btn {
+    font-size:11px; color:var(--accent); cursor:pointer;
+    padding:8px 0; transition:opacity .15s;
+  }
+  .create-pool-btn:hover { opacity:.7; }
+
+  .pool-destroy {
+    cursor:pointer; color:var(--text-3); font-size:12px; margin-left:8px;
+    transition:color .15s;
+  }
+  .pool-destroy:hover { color:var(--red); }
+
+  .form-row { display:flex; gap:10px; }
 
   /* ── CREATE POOL FORM ── */
   .create-form { display:flex; flex-direction:column; gap:14px; max-width:460px; }
