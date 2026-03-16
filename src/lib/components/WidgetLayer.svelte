@@ -376,7 +376,7 @@
             {#if is1x1}
               <!-- ── 1×1: double ring CPU outer, RAM inner ── -->
               <div class="wg-double-ring">
-                <svg viewBox="0 0 140 140" class="wg-ring-svg">
+                <svg viewBox="0 0 160 160" class="wg-ring-svg">
                   <defs>
                     <linearGradient id="cpu-grad-{widget.id}" x1="0%" y1="0%" x2="100%" y2="100%">
                       <stop offset="0%" stop-color="#f97316"/>
@@ -384,23 +384,23 @@
                     </linearGradient>
                   </defs>
                   <!-- CPU outer -->
-                  <circle cx="70" cy="70" r="56" fill="none" class="ring-bg" stroke-width="11"/>
-                  <circle cx="70" cy="70" r="56" fill="none" stroke="url(#cpu-grad-{widget.id})" stroke-width="11"
-                    stroke-linecap="round" transform="rotate(-90 70 70)"
-                    stroke-dasharray={ringDash(56)}
-                    stroke-dashoffset={ringOffset(56, cpuPct)}
+                  <circle cx="80" cy="80" r="64" fill="none" class="ring-bg" stroke-width="13"/>
+                  <circle cx="80" cy="80" r="64" fill="none" stroke="url(#cpu-grad-{widget.id})" stroke-width="13"
+                    stroke-linecap="round" transform="rotate(-90 80 80)"
+                    stroke-dasharray={ringDash(64)}
+                    stroke-dashoffset={ringOffset(64, cpuPct)}
                     style="transition:stroke-dashoffset .6s ease; stroke:{arcColor(cpuPct)}"/>
                   <!-- RAM inner -->
-                  <circle cx="70" cy="70" r="38" fill="none" class="ring-bg" stroke-width="10"/>
-                  <circle cx="70" cy="70" r="38" fill="none" stroke="#3b82f6" stroke-width="10"
-                    stroke-linecap="round" transform="rotate(-90 70 70)"
-                    stroke-dasharray={ringDash(38)}
-                    stroke-dashoffset={ringOffset(38, memPct)}
+                  <circle cx="80" cy="80" r="44" fill="none" class="ring-bg" stroke-width="12"/>
+                  <circle cx="80" cy="80" r="44" fill="none" stroke="#3b82f6" stroke-width="12"
+                    stroke-linecap="round" transform="rotate(-90 80 80)"
+                    stroke-dasharray={ringDash(44)}
+                    stroke-dashoffset={ringOffset(44, memPct)}
                     style="transition:stroke-dashoffset .6s ease;"/>
                   <!-- CPU % -->
-                  <text x="70" y="63" text-anchor="middle" dominant-baseline="middle" class="ring-pct">{cpuPct.toFixed(0)}%</text>
+                  <text x="80" y="73" text-anchor="middle" dominant-baseline="middle" class="ring-pct">{cpuPct.toFixed(0)}%</text>
                   <!-- RAM % -->
-                  <text x="70" y="80" text-anchor="middle" class="ring-sub">{memPct.toFixed(0)}%</text>
+                  <text x="80" y="91" text-anchor="middle" class="ring-sub">{memPct.toFixed(0)}%</text>
                 </svg>
               </div>
 
@@ -409,35 +409,35 @@
               <div class="wg-two-rings">
                 <!-- CPU -->
                 <div class="wg-ring-wrap">
-                  <svg viewBox="0 0 116 116" class="wg-ring-svg-lg">
+                  <svg viewBox="0 0 130 130" class="wg-ring-svg-lg">
                     <defs>
                       <linearGradient id="cpu-grad2-{widget.id}" x1="0%" y1="0%" x2="100%" y2="100%">
                         <stop offset="0%" stop-color="#f97316"/>
                         <stop offset="100%" stop-color="#ef4444"/>
                       </linearGradient>
                     </defs>
-                    <circle cx="58" cy="58" r="46" fill="none" class="ring-bg" stroke-width="10"/>
-                    <circle cx="58" cy="58" r="46" fill="none" stroke="url(#cpu-grad2-{widget.id})" stroke-width="10"
-                      stroke-linecap="round" transform="rotate(-90 58 58)"
-                      stroke-dasharray={ringDash(46)}
-                      stroke-dashoffset={ringOffset(46, cpuPct)}
+                    <circle cx="65" cy="65" r="52" fill="none" class="ring-bg" stroke-width="12"/>
+                    <circle cx="65" cy="65" r="52" fill="none" stroke="url(#cpu-grad2-{widget.id})" stroke-width="12"
+                      stroke-linecap="round" transform="rotate(-90 65 65)"
+                      stroke-dasharray={ringDash(52)}
+                      stroke-dashoffset={ringOffset(52, cpuPct)}
                       style="transition:stroke-dashoffset .6s ease; stroke:{arcColor(cpuPct)}"/>
-                    <text x="58" y="53" text-anchor="middle" dominant-baseline="middle" class="ring-pct">{cpuPct.toFixed(0)}%</text>
-                    <text x="58" y="69" text-anchor="middle" class="ring-label" style="fill:{arcColor(cpuPct)}">CPU</text>
+                    <text x="65" y="60" text-anchor="middle" dominant-baseline="middle" class="ring-pct">{cpuPct.toFixed(0)}%</text>
+                    <text x="65" y="77" text-anchor="middle" class="ring-label" style="fill:{arcColor(cpuPct)}">CPU</text>
                   </svg>
                 </div>
                 <div class="wg-ring-divider"></div>
                 <!-- RAM -->
                 <div class="wg-ring-wrap">
-                  <svg viewBox="0 0 116 116" class="wg-ring-svg-lg">
-                    <circle cx="58" cy="58" r="46" fill="none" class="ring-bg" stroke-width="10"/>
-                    <circle cx="58" cy="58" r="46" fill="none" stroke="#3b82f6" stroke-width="10"
-                      stroke-linecap="round" transform="rotate(-90 58 58)"
-                      stroke-dasharray={ringDash(46)}
-                      stroke-dashoffset={ringOffset(46, memPct)}
+                  <svg viewBox="0 0 130 130" class="wg-ring-svg-lg">
+                    <circle cx="65" cy="65" r="52" fill="none" class="ring-bg" stroke-width="12"/>
+                    <circle cx="65" cy="65" r="52" fill="none" stroke="#3b82f6" stroke-width="12"
+                      stroke-linecap="round" transform="rotate(-90 65 65)"
+                      stroke-dasharray={ringDash(52)}
+                      stroke-dashoffset={ringOffset(52, memPct)}
                       style="transition:stroke-dashoffset .6s ease;"/>
-                    <text x="58" y="53" text-anchor="middle" dominant-baseline="middle" class="ring-pct">{memPct.toFixed(0)}%</text>
-                    <text x="58" y="69" text-anchor="middle" class="ring-label" style="fill:#3b82f6">RAM</text>
+                    <text x="65" y="60" text-anchor="middle" dominant-baseline="middle" class="ring-pct">{memPct.toFixed(0)}%</text>
+                    <text x="65" y="77" text-anchor="middle" class="ring-label" style="fill:#3b82f6">RAM</text>
                   </svg>
                 </div>
               </div>
@@ -812,12 +812,12 @@
   :global([data-theme="light"]) .ring-bg { stroke: rgba(0,0,0,0.08); }
 
   .ring-pct {
-    font-size: 20px; font-weight: 600;
-    fill: var(--text-1); font-family: 'DM Mono', monospace;
+    font-size: 17px; font-weight: 500;
+    fill: var(--text-1); font-family: 'DM Sans', sans-serif;
   }
   .ring-sub {
-    font-size: 13px; fill: var(--text-3);
-    font-family: 'DM Mono', monospace;
+    font-size: 12px; fill: var(--text-3);
+    font-family: 'DM Sans', sans-serif;
   }
   .ring-label {
     font-size: 9px; font-weight: 600;
@@ -836,13 +836,13 @@
   .wg-two-rings {
     display: flex; align-items: center;
     justify-content: space-around; gap: 8px;
-    width: 100%;
+    width: 100%; overflow: hidden;
   }
   .wg-ring-wrap {
     display: flex; flex-direction: column;
-    align-items: center; gap: 6px; flex: 1;
+    align-items: center; justify-content: center; gap: 4px; flex: 1; min-width: 0;
   }
-  .wg-ring-svg-lg { width: 100%; max-width: 116px; }
+  .wg-ring-svg-lg { width: 100%; max-width: 130px; }
   .wg-ring-divider { width: 1px; height: 80px; background: var(--border); flex-shrink: 0; }
   .wg-ring-info { display: flex; flex-direction: column; gap: 4px; width: 100%; }
 
