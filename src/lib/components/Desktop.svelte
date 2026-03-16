@@ -4,9 +4,13 @@
   import { logout } from '$lib/stores/auth.js';
   import Taskbar from './Taskbar.svelte';
   import WindowFrame from './WindowFrame.svelte';
+  import WidgetLayer from './WidgetLayer.svelte';
 </script>
 
 <div class="desktop">
+  <!-- Widgets (below windows) -->
+  <WidgetLayer />
+
   <!-- Windows -->
   {#each $windowList as win (win.id)}
     {#if !win.minimized}
