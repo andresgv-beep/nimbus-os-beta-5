@@ -18,14 +18,14 @@
 
   const SIZE_PRESETS = {
     clock:   [{ label: 'Pequeño', cols:2, rows:2 }, { label: 'Normal', cols:3, rows:2 }, { label: 'Grande', cols:4, rows:2 }],
-    sysmon:  [{ label: 'Normal', cols:3, rows:3 }, { label: 'Grande', cols:4, rows:3 }, { label: 'Compacto', cols:4, rows:2 }],
+    sysmon:  [{ label: '1×1', cols:2, rows:2 }, { label: '1×2', cols:4, rows:2 }, { label: '2×2', cols:4, rows:4 }],
     storage: [{ label: 'Normal',  cols:3, rows:2 }, { label: 'Grande', cols:4, rows:3 }],
     network: [{ label: 'Normal',  cols:3, rows:2 }, { label: 'Grande', cols:4, rows:3 }],
   };
 
   const DEFAULT_LAYOUT = [
     { id: 'w1', type: 'clock',   col: 0,  row: 0, cols: 3, rows: 2 },
-    { id: 'w2', type: 'sysmon',  col: 0,  row: 2, cols: 3, rows: 3 },
+    { id: 'w2', type: 'sysmon',  col: 0,  row: 2, cols: 4, rows: 4 },
     { id: 'w3', type: 'storage', col: -3, row: 0, cols: 3, rows: 2 },
     { id: 'w4', type: 'network', col: -3, row: 2, cols: 3, rows: 2 },
   ];
@@ -271,6 +271,10 @@
   }
 
 
+  // ── Ring gauge helpers ──
+  function ringDash(r) { return (2 * Math.PI * r).toFixed(1); }
+  function ringOffset(r, pct) { return (2 * Math.PI * r * (1 - Math.min(100, pct) / 100)).toFixed(1); }
+
   // ── Arc gauge helper ──
   function describeArc(pct, r, cx, cy) {
     // C-shape: starts at 210deg, sweeps 240deg (bottom-left to bottom-right)
@@ -302,6 +306,15 @@
     const x2 = cx + r * Math.cos(toRad(endAngle));
     const y2 = cy + r * Math.sin(toRad(endAngle));
     return `M ${x1} ${y1} A ${r} ${r} 0 1 1 ${x2} ${y2}`;
+  }
+
+  // CPU history for chart
+  let cpuHistory = Array.from({length:40}, () => 0);
+  let cpuHistoryMax = 40;
+  $: {
+    if (cpuPct > 0) {
+      cpuHistory = [...cpuHistory.slice(-cpuHistoryMax + 1), cpuPct];
+    }
   }
 
   $: cpuPct   = sysData.cpu?.percent    ?? sysData.cpuPercent ?? 0;
@@ -349,41 +362,143 @@
             </div>
 
           {:else if widget.type === 'sysmon'}
-            <div class="wg-header">Sistema</div>
-            <div class="wg-gauges">
-              <!-- CPU gauge -->
-              <div class="wg-gauge">
-                <svg viewBox="0 0 100 80" class="wg-arc-svg">
-                  <!-- bg arc -->
-                  <path d={arcBgPath(36, 50, 52)} class="arc-bg" fill="none" stroke-width="8" stroke-linecap="round"/>
-                  <!-- value arc -->
-                  {#if cpuPct > 0}
-                    <path d={describeArc(cpuPct, 36, 50, 52)} fill="none"
-                      stroke={arcColor(cpuPct)} stroke-width="8" stroke-linecap="round"/>
-                  {/if}
-                  <!-- % text -->
-                  <text x="50" y="52" text-anchor="middle" dominant-baseline="middle" class="arc-pct">{cpuPct.toFixed(0)}%</text>
-                  <!-- label -->
-                  <text x="50" y="66" text-anchor="middle" class="arc-label">CPU</text>
-                  {#if cpuTemp}
-                    <text x="50" y="76" text-anchor="middle" class="arc-temp">{cpuTemp}°C</text>
-                  {/if}
+            {@const is1x1 = widget.cols <= 2}
+            {@const is1x2 = widget.cols >= 4 && widget.rows <= 2}
+            {@const is2x2 = widget.cols >= 4 && widget.rows >= 4}
+
+            {#if is1x1}
+              <!-- ── 1×1: double ring CPU outer, RAM inner ── -->
+              <div class="wg-double-ring">
+                <svg viewBox="0 0 140 140" class="wg-ring-svg">
+                  <defs>
+                    <linearGradient id="cpu-grad-{widget.id}" x1="0%" y1="0%" x2="100%" y2="100%">
+                      <stop offset="0%" stop-color="#f97316"/>
+                      <stop offset="100%" stop-color="#ef4444"/>
+                    </linearGradient>
+                  </defs>
+                  <!-- CPU outer -->
+                  <circle cx="70" cy="70" r="56" fill="none" class="ring-bg" stroke-width="11"/>
+                  <circle cx="70" cy="70" r="56" fill="none" stroke="url(#cpu-grad-{widget.id})" stroke-width="11"
+                    stroke-linecap="round" transform="rotate(-90 70 70)"
+                    stroke-dasharray={ringDash(56)}
+                    stroke-dashoffset={ringOffset(56, cpuPct)}
+                    style="transition:stroke-dashoffset .6s ease; stroke:{arcColor(cpuPct)}"/>
+                  <!-- RAM inner -->
+                  <circle cx="70" cy="70" r="38" fill="none" class="ring-bg" stroke-width="10"/>
+                  <circle cx="70" cy="70" r="38" fill="none" stroke="#3b82f6" stroke-width="10"
+                    stroke-linecap="round" transform="rotate(-90 70 70)"
+                    stroke-dasharray={ringDash(38)}
+                    stroke-dashoffset={ringOffset(38, memPct)}
+                    style="transition:stroke-dashoffset .6s ease;"/>
+                  <!-- CPU % -->
+                  <text x="70" y="63" text-anchor="middle" dominant-baseline="middle" class="ring-pct">{cpuPct.toFixed(0)}%</text>
+                  <!-- RAM % -->
+                  <text x="70" y="80" text-anchor="middle" class="ring-sub">{memPct.toFixed(0)}%</text>
                 </svg>
               </div>
-              <!-- RAM gauge -->
-              <div class="wg-gauge">
-                <svg viewBox="0 0 100 80" class="wg-arc-svg">
-                  <path d={arcBgPath(36, 50, 52)} class="arc-bg" fill="none" stroke-width="8" stroke-linecap="round"/>
-                  {#if memPct > 0}
-                    <path d={describeArc(memPct, 36, 50, 52)} fill="none"
-                      stroke={arcColor(memPct)} stroke-width="8" stroke-linecap="round"/>
-                  {/if}
-                  <text x="50" y="52" text-anchor="middle" dominant-baseline="middle" class="arc-pct">{memPct.toFixed(0)}%</text>
-                  <text x="50" y="66" text-anchor="middle" class="arc-label">RAM</text>
-                  <text x="50" y="76" text-anchor="middle" class="arc-temp">{fmtBytes(memUsed)}</text>
+
+            {:else if is1x2}
+              <!-- ── 1×2 horizontal: two rings side by side ── -->
+              <div class="wg-two-rings">
+                <!-- CPU -->
+                <div class="wg-ring-wrap">
+                  <svg viewBox="0 0 116 116" class="wg-ring-svg-lg">
+                    <defs>
+                      <linearGradient id="cpu-grad2-{widget.id}" x1="0%" y1="0%" x2="100%" y2="100%">
+                        <stop offset="0%" stop-color="#f97316"/>
+                        <stop offset="100%" stop-color="#ef4444"/>
+                      </linearGradient>
+                    </defs>
+                    <circle cx="58" cy="58" r="46" fill="none" class="ring-bg" stroke-width="10"/>
+                    <circle cx="58" cy="58" r="46" fill="none" stroke="url(#cpu-grad2-{widget.id})" stroke-width="10"
+                      stroke-linecap="round" transform="rotate(-90 58 58)"
+                      stroke-dasharray={ringDash(46)}
+                      stroke-dashoffset={ringOffset(46, cpuPct)}
+                      style="transition:stroke-dashoffset .6s ease; stroke:{arcColor(cpuPct)}"/>
+                    <text x="58" y="53" text-anchor="middle" dominant-baseline="middle" class="ring-pct">{cpuPct.toFixed(0)}%</text>
+                    <text x="58" y="69" text-anchor="middle" class="ring-label" style="fill:{arcColor(cpuPct)}">CPU</text>
+                  </svg>
+                </div>
+                <div class="wg-ring-divider"></div>
+                <!-- RAM -->
+                <div class="wg-ring-wrap">
+                  <svg viewBox="0 0 116 116" class="wg-ring-svg-lg">
+                    <circle cx="58" cy="58" r="46" fill="none" class="ring-bg" stroke-width="10"/>
+                    <circle cx="58" cy="58" r="46" fill="none" stroke="#3b82f6" stroke-width="10"
+                      stroke-linecap="round" transform="rotate(-90 58 58)"
+                      stroke-dasharray={ringDash(46)}
+                      stroke-dashoffset={ringOffset(46, memPct)}
+                      style="transition:stroke-dashoffset .6s ease;"/>
+                    <text x="58" y="53" text-anchor="middle" dominant-baseline="middle" class="ring-pct">{memPct.toFixed(0)}%</text>
+                    <text x="58" y="69" text-anchor="middle" class="ring-label" style="fill:#3b82f6">RAM</text>
+                  </svg>
+                </div>
+              </div>
+
+            {:else}
+              <!-- ── 2×2: rings + info + chart ── -->
+              <div class="wg-header">System Resources</div>
+              <div class="wg-two-rings" style="flex:1">
+                <div class="wg-ring-wrap">
+                  <svg viewBox="0 0 112 112" class="wg-ring-svg-lg">
+                    <defs>
+                      <linearGradient id="cpu-grad3-{widget.id}" x1="0%" y1="0%" x2="100%" y2="100%">
+                        <stop offset="0%" stop-color="#f97316"/>
+                        <stop offset="100%" stop-color="#ef4444"/>
+                      </linearGradient>
+                    </defs>
+                    <circle cx="56" cy="56" r="44" fill="none" class="ring-bg" stroke-width="9"/>
+                    <circle cx="56" cy="56" r="44" fill="none" stroke="url(#cpu-grad3-{widget.id})" stroke-width="9"
+                      stroke-linecap="round" transform="rotate(-90 56 56)"
+                      stroke-dasharray={ringDash(44)}
+                      stroke-dashoffset={ringOffset(44, cpuPct)}
+                      style="transition:stroke-dashoffset .6s ease; stroke:{arcColor(cpuPct)}"/>
+                    <text x="56" y="51" text-anchor="middle" dominant-baseline="middle" class="ring-pct">{cpuPct.toFixed(0)}%</text>
+                    <text x="56" y="66" text-anchor="middle" class="ring-label" style="fill:{arcColor(cpuPct)}">CPU</text>
+                  </svg>
+                  <div class="wg-ring-info">
+                    <div class="wg-kv"><span>Cores</span><span>8</span></div>
+                    <div class="wg-kv"><span>Load</span><span>{(cpuPct/100*8*0.9).toFixed(2)}</span></div>
+                  </div>
+                </div>
+                <div class="wg-ring-divider"></div>
+                <div class="wg-ring-wrap">
+                  <svg viewBox="0 0 112 112" class="wg-ring-svg-lg">
+                    <circle cx="56" cy="56" r="44" fill="none" class="ring-bg" stroke-width="9"/>
+                    <circle cx="56" cy="56" r="44" fill="none" stroke="#3b82f6" stroke-width="9"
+                      stroke-linecap="round" transform="rotate(-90 56 56)"
+                      stroke-dasharray={ringDash(44)}
+                      stroke-dashoffset={ringOffset(44, memPct)}
+                      style="transition:stroke-dashoffset .6s ease;"/>
+                    <text x="56" y="51" text-anchor="middle" dominant-baseline="middle" class="ring-pct">{memPct.toFixed(0)}%</text>
+                    <text x="56" y="66" text-anchor="middle" class="ring-label" style="fill:#3b82f6">RAM</text>
+                  </svg>
+                  <div class="wg-ring-info">
+                    <div class="wg-kv"><span>Used</span><span>{fmtBytes(memUsed)}</span></div>
+                    <div class="wg-kv"><span>Total</span><span>{fmtBytes(memTotal)}</span></div>
+                  </div>
+                </div>
+              </div>
+              <!-- Chart -->
+              <div class="wg-chart-wrap">
+                <div class="wg-chart-label">CPU Activity</div>
+                <svg class="wg-chart-svg" viewBox="0 0 300 40" preserveAspectRatio="none">
+                  <defs>
+                    <linearGradient id="chart-grad-{widget.id}" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stop-color="#f97316" stop-opacity="0.45"/>
+                      <stop offset="100%" stop-color="#f97316" stop-opacity="0"/>
+                    </linearGradient>
+                  </defs>
+                  {@const pts = cpuHistory.map((v,i) => [
+                    (i/(cpuHistory.length-1||1))*300,
+                    40 - (Math.min(100,v)/100)*36 - 2
+                  ])}
+                  {@const linePath = pts.map((p,i) => (i===0?`M ${p[0].toFixed(1)} ${p[1].toFixed(1)}`:`L ${p[0].toFixed(1)} ${p[1].toFixed(1)}`)).join(' ')}
+                  <path d="{linePath} L 300 40 L 0 40 Z" fill="url(#chart-grad-{widget.id})"/>
+                  <path d={linePath} fill="none" stroke="#f97316" stroke-width="1.5" stroke-linejoin="round"/>
                 </svg>
               </div>
-            </div>
+            {/if}
 
           {:else if widget.type === 'storage'}
             <div class="wg-header">Storage</div>
@@ -690,7 +805,57 @@
   }
   .ctx-back:hover { opacity: .7; }
 
-  /* ── ARC GAUGES ── */
+  /* ── RING GAUGES ── */
+  .ring-bg { stroke: var(--ibtn-bg); }
+  :global([data-theme="light"]) .ring-bg { stroke: rgba(0,0,0,0.08); }
+
+  .ring-pct {
+    font-size: 20px; font-weight: 600;
+    fill: var(--text-1); font-family: 'DM Mono', monospace;
+  }
+  .ring-sub {
+    font-size: 13px; fill: var(--text-3);
+    font-family: 'DM Mono', monospace;
+  }
+  .ring-label {
+    font-size: 9px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .08em;
+    font-family: 'DM Sans', sans-serif;
+  }
+
+  /* 1×1 double ring */
+  .wg-double-ring {
+    width: 100%; height: 100%;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .wg-ring-svg { width: 100%; max-width: 140px; }
+
+  /* 1×2 and 2×2 side by side */
+  .wg-two-rings {
+    display: flex; align-items: center;
+    justify-content: space-around; gap: 8px;
+    width: 100%;
+  }
+  .wg-ring-wrap {
+    display: flex; flex-direction: column;
+    align-items: center; gap: 6px; flex: 1;
+  }
+  .wg-ring-svg-lg { width: 100%; max-width: 116px; }
+  .wg-ring-divider { width: 1px; height: 80px; background: var(--border); flex-shrink: 0; }
+  .wg-ring-info { display: flex; flex-direction: column; gap: 4px; width: 100%; }
+
+  /* 2×2 chart */
+  .wg-chart-wrap {
+    border-top: 1px solid var(--border);
+    padding-top: 8px; flex-shrink: 0;
+  }
+  .wg-chart-label {
+    font-size: 9px; font-weight: 600; color: var(--text-3);
+    text-transform: uppercase; letter-spacing: .06em; margin-bottom: 5px;
+  }
+  .wg-chart-svg { width: 100%; height: 42px; display: block; }
+
+  /* ── ARC GAUGES (legacy) ── */
   .wg-gauges {
     display: flex; gap: 8px; flex: 1;
     align-items: center; justify-content: center;
