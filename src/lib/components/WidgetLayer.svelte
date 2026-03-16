@@ -13,14 +13,14 @@
     clock:   { name: 'Reloj',    icon: '🕐', cols: 3, rows: 2 },
     sysmon:  { name: 'Sistema',  icon: '📊', cols: 3, rows: 3 },
     storage: { name: 'Storage',  icon: '💾', cols: 3, rows: 2 },
-    network: { name: 'Red',      icon: '🌐', cols: 3, rows: 2 },
+    network: { name: 'Red',      icon: '🌐', cols: 2, rows: 2 },
   };
 
   const SIZE_PRESETS = {
     clock:   [{ label: 'Pequeño', cols:2, rows:2 }, { label: 'Normal', cols:3, rows:2 }, { label: 'Grande', cols:4, rows:2 }],
     sysmon:  [{ label: '1×1', cols:2, rows:2 }, { label: '1×2', cols:4, rows:2 }, { label: '2×2', cols:4, rows:4 }],
     storage: [{ label: 'Normal',  cols:3, rows:2 }, { label: 'Grande', cols:4, rows:3 }],
-    network: [{ label: 'Normal',  cols:3, rows:2 }, { label: 'Grande', cols:4, rows:3 }],
+    network: [{ label: '1×1', cols:2, rows:2 }, { label: '1×2', cols:4, rows:2 }],
   };
 
   const DEFAULT_LAYOUT = [
@@ -246,6 +246,7 @@
         fetch('/api/network',        { headers: hdrs() }).then(r => r.json()).catch(() => ({})),
       ]);
       sysData = sys || {}; storageData = stor || {}; netData = net || {};
+      updateNetCharts();
     } catch {}
   }
   function startPolling() { fetchData(); pollTimer = setInterval(fetchData, 5000); }
@@ -436,6 +437,71 @@
   $: pools    = storageData.pools       || [];
   $: netIfaces   = Array.isArray(netData) ? netData : (netData.interfaces || []);
   $: primaryIface = netIfaces.find(i => i.ip && i.ip !== '127.0.0.1') || netIfaces[0] || {};
+
+  // Network speed history
+  let netRxSpeed = 0, netTxSpeed = 0;
+  let prevRx = 0, prevTx = 0;
+  const NET_HIST = 30;
+  let dlHist = Array(NET_HIST).fill(0);
+  let ulHist = Array(NET_HIST).fill(0);
+
+  function fmtNetSpeed(bps) {
+    if (!bps || bps <= 0) return '0 KB/s';
+    const mbps = bps / 1e6;
+    if (mbps >= 1) return mbps.toFixed(1) + ' MB/s';
+    return (bps / 1e3).toFixed(0) + ' KB/s';
+  }
+
+  function updateNetCharts() {
+    // Update history
+    const rx = netData?.rx_bytes || primaryIface?.rx_bytes || 0;
+    const tx = netData?.tx_bytes || primaryIface?.tx_bytes || 0;
+    if (prevRx > 0) netRxSpeed = Math.max(0, (rx - prevRx) / 5);
+    if (prevTx > 0) netTxSpeed = Math.max(0, (tx - prevTx) / 5);
+    prevRx = rx; prevTx = tx;
+
+    dlHist = [...dlHist.slice(-NET_HIST+1), netRxSpeed];
+    ulHist = [...ulHist.slice(-NET_HIST+1), netTxSpeed];
+
+    drawNetCharts();
+  }
+
+  function drawNetChart(canvas, history, color) {
+    if (!canvas) return;
+    const dpr = window.devicePixelRatio || 1;
+    const W = canvas.parentElement?.offsetWidth || 120;
+    const H = 36;
+    canvas.width  = W * dpr;
+    canvas.height = H * dpr;
+    canvas.style.width  = W + 'px';
+    canvas.style.height = H + 'px';
+    const ctx = canvas.getContext('2d');
+    ctx.scale(dpr, dpr);
+    ctx.clearRect(0, 0, W, H);
+    const max = Math.max(...history, 1000);
+    const pts = history.map((v,i) => [
+      (i / (history.length-1)) * W,
+      H - (v/max) * (H-3) - 1
+    ]);
+    const grad = ctx.createLinearGradient(0, 0, 0, H);
+    grad.addColorStop(0, color + '44');
+    grad.addColorStop(1, color + '08');
+    ctx.beginPath();
+    pts.forEach(([x,y],i) => i===0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y));
+    ctx.lineTo(W,H); ctx.lineTo(0,H); ctx.closePath();
+    ctx.fillStyle = grad; ctx.fill();
+    ctx.beginPath();
+    pts.forEach(([x,y],i) => i===0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y));
+    ctx.strokeStyle = color; ctx.lineWidth = 1.5; ctx.lineJoin = 'round'; ctx.stroke();
+  }
+
+  function drawNetCharts() {
+    document.querySelectorAll('.wg-net-canvas').forEach(canvas => {
+      const role = canvas.dataset.role;
+      if (role === 'dl') drawNetChart(canvas, dlHist, '#3b82f6');
+      else               drawNetChart(canvas, ulHist, '#a855f7');
+    });
+  }
 </script>
 
 <!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -637,14 +703,26 @@
             {/if}
 
           {:else if widget.type === 'network'}
+            {@const is1x2net = widget.cols >= 4}
             <div class="wg-header">Red</div>
-            {#if primaryIface.name}
-              <div class="wg-kv"><span>Interfaz</span><span>{primaryIface.name}</span></div>
-              <div class="wg-kv"><span>IP local</span><span>{primaryIface.ip||'—'}</span></div>
-              <div class="wg-kv"><span>Velocidad</span><span>{primaryIface.speed||'—'}</span></div>
-            {:else}
-              <div class="wg-empty">Sin conexión</div>
-            {/if}
+            <div class="wg-net-wrap" class:horizontal={is1x2net}>
+              <!-- Download -->
+              <div class="wg-net-row">
+                <div class="wg-net-label">
+                  <span class="wg-net-arrow dl">↓</span>
+                  <span class="wg-net-val">{fmtNetSpeed(netRxSpeed)}</span>
+                </div>
+                <canvas class="wg-net-canvas" data-netid="{widget.id}" data-role="dl"></canvas>
+              </div>
+              <!-- Upload -->
+              <div class="wg-net-row">
+                <div class="wg-net-label">
+                  <span class="wg-net-arrow ul">↑</span>
+                  <span class="wg-net-val">{fmtNetSpeed(netTxSpeed)}</span>
+                </div>
+                <canvas class="wg-net-canvas" data-netid="{widget.id}" data-role="ul"></canvas>
+              </div>
+            </div>
           {/if}
         </div>
 
@@ -925,6 +1003,31 @@
     cursor: pointer; transition: opacity .15s;
   }
   .ctx-back:hover { opacity: .7; }
+
+  /* ── NETWORK WIDGET ── */
+  .wg-net-wrap {
+    display: flex; flex-direction: column;
+    gap: 8px; flex: 1; width: 100%;
+  }
+  .wg-net-wrap.horizontal {
+    flex-direction: row; gap: 12px;
+  }
+  .wg-net-row {
+    display: flex; flex-direction: column; gap: 3px; flex: 1;
+  }
+  .wg-net-label {
+    display: flex; justify-content: space-between; align-items: baseline;
+  }
+  .wg-net-arrow {
+    font-size: 11px; font-weight: 700;
+  }
+  .wg-net-arrow.dl { color: #3b82f6; }
+  .wg-net-arrow.ul { color: #a855f7; }
+  .wg-net-val {
+    font-size: 11px; color: var(--text-1);
+    font-family: 'DM Mono', monospace;
+  }
+  .wg-net-canvas { display: block; width: 100%; border-radius: 4px; }
 
   /* ── LCD CLOCK ── */
   .wg-lcd-wrap {
