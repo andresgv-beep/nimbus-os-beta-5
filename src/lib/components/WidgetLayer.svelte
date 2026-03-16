@@ -40,7 +40,14 @@
 
   function openMenu(e, widgetId) {
     e.stopPropagation();
-    activeMenu = activeMenu?.widgetId === widgetId ? null : { widgetId, x: e.clientX, y: e.clientY, sub: null };
+    if (activeMenu?.widgetId === widgetId) { activeMenu = null; return; }
+    // Position menu relative to the button, not mouse
+    const btn = e.currentTarget;
+    const rect = btn.getBoundingClientRect();
+    // Place menu to the left of button, above it
+    const x = Math.min(rect.right, window.innerWidth - 210);
+    const y = rect.top;
+    activeMenu = { widgetId, x, y, sub: null };
   }
 
   function openAddMenu(e) {
@@ -155,7 +162,16 @@
   function onDragEnd() {
     if (dragging && dragWidget) {
       const idx = widgets.findIndex(w => w.id === dragging.id);
-      if (idx >= 0) { widgets[idx].col = dragPreviewCol; widgets[idx].row = dragPreviewRow; widgets = widgets; saveLayout(); }
+      if (idx >= 0) {
+        // Only move if no collision at new position
+        if (!hasCollision(dragPreviewCol, dragPreviewRow, dragWidget.cols, dragWidget.rows, dragging.id)) {
+          widgets[idx].col = dragPreviewCol;
+          widgets[idx].row = dragPreviewRow;
+        }
+        // else: revert to original position (no change)
+        widgets = widgets;
+        saveLayout();
+      }
     }
     dragging = null; dragWidget = null;
     window.removeEventListener('mousemove', onDragMove);
@@ -165,29 +181,43 @@
   // ── Widget actions ──
   function removeWidget(id) { widgets = widgets.filter(w => w.id !== id); saveLayout(); closeMenu(); }
 
+  function hasCollision(col, row, cols, rows, excludeId = null) {
+    return widgets.some(w => {
+      if (w.id === excludeId) return false;
+      return col < w.col + w.cols && col + cols > w.col &&
+             row < w.row + w.rows && row + rows > w.row;
+    });
+  }
+
   function addWidget(type) {
     const meta = WIDGET_TYPES[type];
     const id = 'w' + Date.now();
     let placed = false;
-    for (let r = 0; r <= gridRows - meta.rows && !placed; r++) {
-      for (let c = 0; c <= gridCols - meta.cols && !placed; c++) {
-        if (!widgets.some(w => c < w.col + w.cols && c + meta.cols > w.col && r < w.row + w.rows && r + meta.rows > w.row)) {
+    // Try every grid position
+    outer: for (let r = 0; r <= gridRows - meta.rows; r++) {
+      for (let c = 0; c <= gridCols - meta.cols; c++) {
+        if (!hasCollision(c, r, meta.cols, meta.rows)) {
           widgets = [...widgets, { id, type, col: c, row: r, cols: meta.cols, rows: meta.rows }];
           placed = true;
+          break outer;
         }
       }
     }
+    // Fallback: place at 0,0 even if overlap
     if (!placed) widgets = [...widgets, { id, type, col: 0, row: 0, cols: meta.cols, rows: meta.rows }];
     saveLayout(); closeMenu();
   }
 
   function resizeWidget(id, cols, rows) {
     const idx = widgets.findIndex(w => w.id === id);
-    if (idx >= 0) {
-      widgets[idx].cols = cols;
-      widgets[idx].rows = rows;
-      widgets[idx].col = Math.min(widgets[idx].col, gridCols - cols);
-      widgets[idx].row = Math.min(widgets[idx].row, gridRows - rows);
+    if (idx < 0) { closeMenu(); return; }
+    const w = widgets[idx];
+    // Check if resize causes collision
+    if (!hasCollision(w.col, w.row, cols, rows, id)) {
+      widgets[idx] = { ...w, cols, rows,
+        col: Math.min(w.col, gridCols - cols),
+        row: Math.min(w.row, gridRows - rows),
+      };
       widgets = widgets;
       saveLayout();
     }
@@ -324,18 +354,19 @@
           {/if}
         </div>
 
-        <!-- Drag ghost -->
-        {#if isDrag}
-          <div class="snap-ghost"
-            style="left:{cellX(dragPreviewCol)}px; top:{cellY(dragPreviewRow)}px; width:{cellW(widget.cols)}px; height:{cellH(widget.rows)}px;">
-          </div>
-        {/if}
       </div>
+
+      <!-- Drag ghost — sibling of widget, not child -->
+      {#if isDrag}
+        <div class="snap-ghost"
+          style="left:{cellX(dragPreviewCol)}px; top:{cellY(dragPreviewRow)}px; width:{cellW(widget.cols)}px; height:{cellH(widget.rows)}px;">
+        </div>
+      {/if}
 
       <!-- Context menu for this widget -->
       {#if menuOpen}
         <!-- svelte-ignore a11y_no_static_element_interactions -->
-        <div class="ctx-menu" style="left:{activeMenu.x}px; top:{activeMenu.y}px;"
+        <div class="ctx-menu" style="left:{activeMenu.x}px; top:{activeMenu.y}px; transform:translate(-100%, -100%);"
           on:click|stopPropagation>
 
           {#if activeMenu.sub === 'size'}
@@ -564,12 +595,12 @@
     box-shadow: 0 16px 40px rgba(0,0,0,0.4), 0 2px 8px rgba(0,0,0,0.2);
     overflow: hidden;
     animation: ctxIn .12s cubic-bezier(0.16,1,0.3,1) both;
-    transform: translateY(-100%);
     pointer-events: auto;
+    /* Position set via JS — no transform needed */
   }
   @keyframes ctxIn {
-    from { opacity: 0; transform: translateY(calc(-100% + 6px)) scale(.97); }
-    to   { opacity: 1; transform: translateY(-100%) scale(1); }
+    from { opacity: 0; transform: scale(.97); }
+    to   { opacity: 1; transform: scale(1); }
   }
   .ctx-header {
     display: flex; align-items: center; gap: 8px;
