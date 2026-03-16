@@ -38,15 +38,21 @@
   // ── Context menu ──
   let activeMenu = null; // { widgetId, x, y, sub: null | 'size' | 'add' }
 
-  function openMenu(e, widgetId) {
+  function openMenu(e, widgetId, widget) {
     e.stopPropagation();
     if (activeMenu?.widgetId === widgetId) { activeMenu = null; return; }
-    // Position menu relative to the button, not mouse
-    const btn = e.currentTarget;
-    const rect = btn.getBoundingClientRect();
-    // Place menu to the left of button, above it
-    const x = Math.min(rect.right, window.innerWidth - 210);
-    const y = rect.top;
+    // Position menu above the widget, aligned to its right edge
+    const wLeft = cellX(widget.col);
+    const wTop  = cellY(widget.row);
+    const wWidth = cellW(widget.cols);
+    const menuW = 210;
+    // Default: right-align with widget
+    let x = wLeft + wWidth - menuW;
+    // If goes off left edge, left-align instead
+    if (x < 8) x = wLeft;
+    // If goes off right edge, clamp
+    if (x + menuW > window.innerWidth - 8) x = window.innerWidth - menuW - 8;
+    const y = wTop; // appears above widget
     activeMenu = { widgetId, x, y, sub: null };
   }
 
@@ -294,7 +300,7 @@
         on:mousedown={(e) => onDragStart(e, widget)}
       >
         <!-- 3-dot menu button -->
-        <button class="wm-btn" on:click={(e) => openMenu(e, widget.id)} title="Opciones">
+        <button class="wm-btn" on:click={(e) => openMenu(e, widget.id, widget)} title="Opciones">
           <span class="wm-dot"></span>
           <span class="wm-dot"></span>
           <span class="wm-dot"></span>
@@ -366,7 +372,7 @@
       <!-- Context menu for this widget -->
       {#if menuOpen}
         <!-- svelte-ignore a11y_no_static_element_interactions -->
-        <div class="ctx-menu" style="left:{activeMenu.x}px; top:{activeMenu.y}px; transform:translate(-100%, -100%);"
+        <div class="ctx-menu" style="left:{activeMenu.x}px; top:{activeMenu.y}px; transform:translateY(-100%) translateY(-8px);"
           on:click|stopPropagation>
 
           {#if activeMenu.sub === 'size'}
