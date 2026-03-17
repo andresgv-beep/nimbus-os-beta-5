@@ -347,9 +347,9 @@
   .tb-btn.minimized { opacity: 0.45; }
 
   .tb-emoji { font-size: 19px; line-height: 1; }
-  .tb-icon-img { width: 22px; height: 22px; object-fit: contain; border-radius: 6px; }
-  .dock-icon-img { width: 28px; height: 28px; object-fit: contain; border-radius: 8px; }
-  .ctx-icon-img { width: 16px; height: 16px; object-fit: contain; border-radius: 4px; }
+  .tb-icon-img { width: 22px; height: 22px; object-fit: contain; border-radius: 6px; mix-blend-mode: screen; }
+  .dock-icon-img { width: 28px; height: 28px; object-fit: contain; border-radius: 8px; mix-blend-mode: screen; }
+  .ctx-icon-img { width: 16px; height: 16px; object-fit: contain; border-radius: 4px; mix-blend-mode: screen; }
 
   .tb-dot {
     width: 4px; height: 4px; border-radius: 50%;
