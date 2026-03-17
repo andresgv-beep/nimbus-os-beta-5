@@ -4,7 +4,7 @@ export const APP_META = {
   nimtorrent:   { name: 'NimTorrent',      icon: '/icons/nimtorrent.png',  width: 820, height: 520 },
   monitor:      { name: 'System Monitor',  icon: '/icons/monitor.png',     width: 700, height: 480 },
   containers:   { name: 'Containers',      icon: '/icons/containers.png',  width: 800, height: 520 },
-  mediaplayer:  { name: 'Media Player',    icon: '/icons/media.png',       width: 650, height: 500 },
+  mediaplayer:  { name: 'Media Player',    icon: '/icons/media.svg',       width: 650, height: 500 },
   appstore:     { name: 'App Store',       icon: '/icons/appstore.svg',    width: 900, height: 600 },
   texteditor:   { name: 'Text Editor',     icon: '/icons/notes.svg',       width: 700, height: 500 },
   terminal:     { name: 'Terminal',        icon: '/icons/terminal.svg',    width: 700, height: 450 },
