@@ -10,14 +10,14 @@
     clock:   { name: 'Reloj',   icon: '🕐', cols: 2, rows: 2 },
     sysmon:  { name: 'Sistema', icon: '📊', cols: 2, rows: 2 },
     network: { name: 'Red',     icon: '🌐', cols: 2, rows: 2 },
-    storage: { name: 'Storage', icon: '💾', cols: 3, rows: 2 },
+    storage: { name: 'Storage', icon: '💾', cols: 2, rows: 2 },
   };
 
   const SIZE_PRESETS = {
     clock:   [{ label: '1×1', cols:2, rows:2 }],
     sysmon:  [{ label: '1×1', cols:2, rows:2 }, { label: '1×2', cols:4, rows:2 }, { label: '2×2', cols:4, rows:4 }],
     network: [{ label: '1×1', cols:2, rows:2 }, { label: '1×2', cols:4, rows:2 }],
-    storage: [{ label: 'Normal', cols:3, rows:2 }, { label: 'Grande', cols:4, rows:3 }],
+    storage: [{ label: '1×1', cols:2, rows:2 }, { label: '1×2', cols:4, rows:2 }, { label: '2×2', cols:4, rows:4 }],
   };
 
   const DEFAULT_LAYOUT = [
@@ -250,6 +250,8 @@
   }
 
   // ── Ring gauge helpers ──
+  function stoColor(pct) { return pct < 70 ? '#4ade80' : pct < 85 ? '#fbbf24' : '#f87171'; }
+
   function ringDash(r)       { return (2*Math.PI*r).toFixed(1); }
   function ringOffset(r,pct) { return (2*Math.PI*r*(1-Math.min(100,pct)/100)).toFixed(1); }
   function arcColor(pct)     { return pct<60?'#22c55e':pct<80?'#f97316':'#ef4444'; }
@@ -504,19 +506,84 @@
             </div>
 
           {:else if widget.type === 'storage'}
-            <!-- ── STORAGE ── -->
-            <div class="wg-header">Storage</div>
-            {#if pools.length > 0}
-              {#each pools.slice(0,2) as pool}
-                <div class="wg-bar-row">
-                  <span class="wg-label">{pool.name}</span>
-                  <div class="wg-track"><div class="wg-fill sto" style="width:{pool.usagePercent||0}%"></div></div>
-                  <span class="wg-val">{pool.usagePercent||0}%</span>
+            {@const is1x1sto  = widget.cols <= 2 && widget.rows <= 2}
+            {@const is1x2sto  = widget.cols >= 4 && widget.rows <= 2}
+            {@const stoPoolId = widget.storageTarget || null}
+            {@const stoPool   = stoPoolId ? pools.find(p => p.name === stoPoolId) : pools[0]}
+
+            {#if is1x1sto}
+              <!-- ── STORAGE 1×1: single ring ── -->
+              <div class="wg-sto-select-wrap">
+                <!-- svelte-ignore a11y_change_events_have_key_events -->
+                <select class="wg-sto-select"
+                  on:change={(e) => { const idx = widgets.findIndex(w => w.id === widget.id); if(idx>=0){ widgets[idx].storageTarget = e.target.value; widgets=widgets; saveLayout(); } }}>
+                  {#each pools as p}
+                    <option value={p.name} selected={stoPoolId === p.name || (!stoPoolId && p === pools[0])}>{p.name}</option>
+                  {/each}
+                </select>
+              </div>
+              {#if stoPool}
+                <div class="wg-double-ring" style="margin-top:4px">
+                  <svg viewBox="0 0 110 110" class="wg-ring-svg">
+                    <circle cx="55" cy="55" r="44" fill="none" class="ring-bg" stroke-width="11"/>
+                    <circle cx="55" cy="55" r="44" fill="none" stroke-width="11" stroke-linecap="round"
+                      transform="rotate(-90 55 55)"
+                      stroke-dasharray={ringDash(44)}
+                      stroke-dashoffset={ringOffset(44, stoPool.usagePercent||0)}
+                      style="stroke:{stoColor(stoPool.usagePercent||0)};transition:stroke-dashoffset .6s ease"/>
+                    <text x="55" y="50" text-anchor="middle" dominant-baseline="middle" class="ring-pct">{stoPool.usagePercent||0}%</text>
+                    <text x="55" y="67" text-anchor="middle" class="ring-sub" style="font-size:8px">{stoPool.usedFormatted||'—'} / {stoPool.totalFormatted||'—'}</text>
+                  </svg>
                 </div>
-                <div class="wg-sub">{pool.usedFormatted||'—'} / {pool.totalFormatted||'—'}</div>
-              {/each}
+              {:else}
+                <div class="wg-empty">Sin pools</div>
+              {/if}
+
+            {:else if is1x2sto}
+              <!-- ── STORAGE 1×2: bars ── -->
+              <div class="wg-header">Storage</div>
+              {#if pools.length > 0}
+                <div class="wg-sto-bars">
+                  {#each pools as pool}
+                    <div class="wg-sto-bar-row">
+                      <div class="wg-sto-bar-info">
+                        <span class="wg-sto-bar-name">{pool.name}</span>
+                        <span class="wg-sto-bar-size">{pool.usedFormatted||'—'} / {pool.totalFormatted||'—'}</span>
+                      </div>
+                      <div class="wg-sto-track">
+                        <div class="wg-sto-fill" style="width:{pool.usagePercent||0}%;background:{stoColor(pool.usagePercent||0)}"></div>
+                      </div>
+                    </div>
+                  {/each}
+                </div>
+              {:else}
+                <div class="wg-empty">Sin pools</div>
+              {/if}
+
             {:else}
-              <div class="wg-empty">Sin pools configurados</div>
+              <!-- ── STORAGE 2×2: cards + total ── -->
+              <div class="wg-header">Storage</div>
+              {#if pools.length > 0}
+                <div class="wg-sto-cards">
+                  {#each pools as pool}
+                    <div class="wg-sto-card">
+                      <div class="wg-sto-card-top">
+                        <div>
+                          <div class="wg-sto-card-name">{pool.name}</div>
+                          <div class="wg-sto-card-raid">{pool.raidLevel || pool.type || '—'}</div>
+                        </div>
+                        <span class="wg-sto-card-pct" style="color:{stoColor(pool.usagePercent||0)}">{pool.usagePercent||0}%</span>
+                      </div>
+                      <div class="wg-sto-track">
+                        <div class="wg-sto-fill" style="width:{pool.usagePercent||0}%;background:{stoColor(pool.usagePercent||0)}"></div>
+                      </div>
+                      <div class="wg-sto-card-meta">{pool.usedFormatted||'—'} usado · {pool.availableFormatted||'—'} libre</div>
+                    </div>
+                  {/each}
+                </div>
+              {:else}
+                <div class="wg-empty">Sin pools</div>
+              {/if}
             {/if}
           {/if}
 
@@ -767,6 +834,31 @@
     cursor: pointer; transition: opacity .15s;
   }
   .ctx-back:hover { opacity: .7; }
+
+  /* ── STORAGE WIDGET ── */
+  .wg-sto-select-wrap { width:100%; flex-shrink:0; }
+  .wg-sto-select {
+    width:100%; font-size:9px; padding:3px 8px; border-radius:6px;
+    border:1px solid var(--border); background:var(--ibtn-bg);
+    color:var(--text-2); font-family:'DM Sans',sans-serif;
+    cursor:pointer; appearance:none; text-align:center; outline:none;
+  }
+  .wg-sto-select:focus { border-color:var(--border-hi); }
+  .wg-sto-bars { display:flex; flex-direction:column; gap:10px; flex:1; }
+  .wg-sto-bar-row { display:flex; flex-direction:column; gap:5px; }
+  .wg-sto-bar-info { display:flex; justify-content:space-between; align-items:baseline; }
+  .wg-sto-bar-name { font-size:11px; font-weight:500; color:var(--text-1); }
+  .wg-sto-bar-size { font-size:10px; color:var(--text-3); font-family:'DM Mono',monospace; }
+  .wg-sto-track { height:8px; border-radius:4px; background:var(--ibtn-bg); overflow:hidden; }
+  :global([data-theme="light"]) .wg-sto-track { background:rgba(0,0,0,0.07); }
+  .wg-sto-fill { height:100%; border-radius:4px; transition:width .5s ease; }
+  .wg-sto-cards { display:flex; flex-direction:column; gap:8px; flex:1; }
+  .wg-sto-card { border:1px solid var(--border); border-radius:8px; padding:9px 12px; display:flex; flex-direction:column; gap:6px; }
+  .wg-sto-card-top { display:flex; justify-content:space-between; align-items:center; }
+  .wg-sto-card-name { font-size:12px; font-weight:500; color:var(--text-1); }
+  .wg-sto-card-raid { font-size:9px; color:var(--text-3); letter-spacing:.04em; margin-top:1px; }
+  .wg-sto-card-pct  { font-size:14px; font-weight:500; font-family:'DM Mono',monospace; }
+  .wg-sto-card-meta { font-size:10px; color:var(--text-3); font-family:'DM Mono',monospace; }
 
   /* ── NETWORK WIDGET ── */
   .wg-net-wrap {
