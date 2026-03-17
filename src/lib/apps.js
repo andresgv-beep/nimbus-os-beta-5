@@ -7,6 +7,6 @@ export const APP_META = {
   mediaplayer:  { name: 'Media Player',    icon: '/icons/media.png',       width: 650, height: 500 },
   appstore:     { name: 'App Store',       icon: '/icons/appstore.png',    width: 900, height: 600 },
   texteditor:   { name: 'Text Editor',     icon: '/icons/notes.png',       width: 700, height: 500 },
-  terminal:     { name: 'Terminal',        icon: '/icons/terminal.png',    width: 700, height: 450 },
+  terminal:     { name: 'Terminal',        icon: '/icons/terminal.svg',    width: 700, height: 450 },
   vms:          { name: 'Virtual Machines',icon: '/icons/vms.png',         width: 850, height: 550 },
 };
