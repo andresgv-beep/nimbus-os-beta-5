@@ -102,7 +102,11 @@
             title={meta.name}
             on:click={() => handleAppClick(appId)}
             on:contextmenu={(e) => openCtxMenu(e, appId, $windowList.find(w => w.appId === appId))}>
-            <span class="tb-emoji">{meta.icon}</span>
+            {#if isIconUrl(meta.icon)}
+              <img src={meta.icon} alt={meta.name} class="tb-icon-img" on:error={(e) => e.target.style.opacity='0'}/>
+            {:else}
+              <span class="tb-emoji">{meta.icon}</span>
+            {/if}
             {#if isOpen}<div class="tb-dot"></div>{/if}
           </button>
         {/if}
@@ -118,7 +122,11 @@
             title={meta?.name || win.appId}
             on:click={() => toggleMinimize(win)}
             on:contextmenu={(e) => openCtxMenu(e, win.appId, win)}>
-            <span class="tb-emoji">{meta?.icon || '📦'}</span>
+            {#if isIconUrl(meta?.icon)}
+              <img src={meta.icon} alt={meta?.name} class="tb-icon-img" on:error={(e) => e.target.style.opacity='0'}/>
+            {:else}
+              <span class="tb-emoji">{meta?.icon || '📦'}</span>
+            {/if}
             <div class="tb-dot"></div>
           </button>
         {/each}
@@ -165,7 +173,11 @@
             title={meta.name}
             on:click={() => handleAppClick(appId)}
             on:contextmenu={(e) => openCtxMenu(e, appId, $windowList.find(w => w.appId === appId))}>
-            <span class="dock-emoji">{meta.icon}</span>
+            {#if isIconUrl(meta.icon)}
+              <img src={meta.icon} alt={meta.name} class="dock-icon-img" on:error={(e) => e.target.style.opacity='0'}/>
+            {:else}
+              <span class="dock-emoji">{meta.icon}</span>
+            {/if}
             {#if isOpen}<div class="dock-dot"></div>{/if}
           </button>
         {/if}
@@ -179,7 +191,11 @@
             title={meta?.name || win.appId}
             on:click={() => toggleMinimize(win)}
             on:contextmenu={(e) => openCtxMenu(e, win.appId, win)}>
-            <span class="dock-emoji">{meta?.icon || '📦'}</span>
+            {#if isIconUrl(meta?.icon)}
+              <img src={meta.icon} alt={meta?.name} class="dock-icon-img" on:error={(e) => e.target.style.opacity='0'}/>
+            {:else}
+              <span class="dock-emoji">{meta?.icon || '📦'}</span>
+            {/if}
             <div class="dock-dot"></div>
           </button>
         {/each}
@@ -198,7 +214,11 @@
   <div class="ctx-menu" style="left:{ctxMenu.x}px; top:{ctxMenu.y}px;">
     <!-- Header -->
     <div class="ctx-header">
-      <span class="ctx-icon">{ctxMeta?.icon || '📦'}</span>
+      {#if isIconUrl(ctxMeta?.icon)}
+          <img src={ctxMeta.icon} alt={ctxMeta?.name} class="ctx-icon-img"/>
+        {:else}
+          <span class="ctx-icon">{ctxMeta?.icon || '📦'}</span>
+        {/if}
       <span class="ctx-app-name">{ctxMeta?.name || ctxMenu.appId}</span>
     </div>
     <div class="ctx-divider"></div>
@@ -325,6 +345,9 @@
   .tb-btn.minimized { opacity: 0.45; }
 
   .tb-emoji { font-size: 19px; line-height: 1; }
+  .tb-icon-img { width: 22px; height: 22px; object-fit: contain; border-radius: 6px; }
+  .dock-icon-img { width: 28px; height: 28px; object-fit: contain; border-radius: 8px; }
+  .ctx-icon-img { width: 16px; height: 16px; object-fit: contain; border-radius: 4px; }
 
   .tb-dot {
     width: 4px; height: 4px; border-radius: 50%;

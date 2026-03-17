@@ -149,7 +149,7 @@
   }
   .app-item:hover .app-icon { transform: scale(1.1) translateY(-2px); }
   .icon-emoji { font-size: 32px; line-height: 1; }
-  .icon-img { width: 40px; height: 40px; border-radius: 10px; object-fit: contain; }
+  .icon-img { width: 48px; height: 48px; border-radius: 12px; object-fit: contain; }
   .app-name {
     font-size: 10px; color: var(--text-2);
     text-align: center; font-family: 'DM Sans', sans-serif;
