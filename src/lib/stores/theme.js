@@ -32,24 +32,23 @@ let saveTimeout = null;
 function computeUiScale(setting) {
   if (setting !== 'auto' && typeof setting === 'number') return setting / 100;
 
-  // Auto-detect based on logical resolution (CSS pixels, not device pixels)
   const w = window.innerWidth;
-  const h = window.innerHeight;
   const dpr = window.devicePixelRatio || 1;
 
-  // Physical pixels
-  const pw = w * dpr;
+  // The UI is designed for 1920x1080 at DPR 1.0.
+  // If the OS already applies DPR scaling (e.g. 4K at 200% = 1920 CSS px),
+  // the CSS pixel width is already ~1920 and no extra zoom is needed.
+  //
+  // When CSS pixels exceed 1920 (higher res without OS scaling), we scale up
+  // proportionally so the UI elements stay the same physical size.
+  //
+  // Formula: scale = CSS_width / 1920, clamped between 0.85 and 1.5
 
-  // The UI is designed for ~1920x1080 at 1x DPR.
-  // If the browser already scales via DPR (e.g. 4K at 200% = 1920 CSS px), no extra zoom needed.
-  // Only scale when CSS pixel width is significantly different from 1920.
-  if (w <= 1280) return 0.85;       // Small screens / 720p
-  if (w <= 1600) return 0.95;       // 900p / small 1080p
-  if (w <= 1920) return 1.0;        // Standard 1080p baseline
-  if (w <= 2560) return 1.0;        // 1440p — usually fine at 1x
-  // Ultra-wide or 4K at low/no DPR scaling
-  if (w > 2560 && dpr < 1.5) return 1.25;  // 4K with no OS scaling
-  return 1.0;
+  const baseline = 1920;
+  const scale = w / baseline;
+
+  // Clamp: never go below 0.85 (tiny screens) or above 1.5 (absurd)
+  return Math.max(0.85, Math.min(1.5, Math.round(scale * 20) / 20)); // round to 0.05 steps
 }
 
 // Apply theme to DOM
