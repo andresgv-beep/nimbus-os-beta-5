@@ -1225,7 +1225,7 @@ func handleStorageRoutes(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Try ZFS routes first
-		if hasZfs && handleZfsRoutes(w, r, method, urlPath, session) {
+		if hasZfs && handleZfsRoutes(w, r, method, urlPath, session, nil) {
 			return
 		}
 
@@ -1272,11 +1272,11 @@ func handleStorageRoutes(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Try ZFS routes first
-		if hasZfs && handleZfsRoutes(w, r, method, urlPath, session) {
+		body, _ := readBody(r)
+		if hasZfs && handleZfsRoutes(w, r, method, urlPath, session, body) {
 			return
 		}
 
-		body, _ := readBody(r)
 		switch urlPath {
 		case "/api/storage/pool":
 			poolType := bodyStr(body, "type")

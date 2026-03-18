@@ -943,7 +943,7 @@ func getZfsPoolInfo(poolConf map[string]interface{}, primaryPool string) map[str
 // ZFS HTTP Routes
 // ═══════════════════════════════════
 
-func handleZfsRoutes(w http.ResponseWriter, r *http.Request, method, urlPath string, session map[string]interface{}) bool {
+func handleZfsRoutes(w http.ResponseWriter, r *http.Request, method, urlPath string, session map[string]interface{}, body map[string]interface{}) bool {
 	// GET routes
 	if method == "GET" {
 		switch urlPath {
@@ -969,7 +969,6 @@ func handleZfsRoutes(w http.ResponseWriter, r *http.Request, method, urlPath str
 
 	// POST routes (need admin — already checked by caller)
 	if method == "POST" {
-		body, _ := readBody(r)
 		switch urlPath {
 		case "/api/storage/zfs/import":
 			jsonOk(w, importPoolZfs(body))
@@ -992,7 +991,6 @@ func handleZfsRoutes(w http.ResponseWriter, r *http.Request, method, urlPath str
 
 	// PUT routes
 	if method == "PUT" {
-		body, _ := readBody(r)
 		switch urlPath {
 		case "/api/storage/dataset":
 			jsonOk(w, updateZfsDataset(body))
@@ -1009,7 +1007,6 @@ func handleZfsRoutes(w http.ResponseWriter, r *http.Request, method, urlPath str
 
 	// DELETE routes
 	if method == "DELETE" {
-		body, _ := readBody(r)
 		switch urlPath {
 		case "/api/storage/dataset":
 			jsonOk(w, destroyZfsDataset(body))
