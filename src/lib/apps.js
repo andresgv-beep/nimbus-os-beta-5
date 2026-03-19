@@ -2,6 +2,8 @@ export const APP_META = {
   files:        { name: 'Files',           icon: '/icons/files.png',       width: 860, height: 540 },
   nimsettings:  { name: 'NimSettings',     icon: '/icons/settings.png',    width: 880, height: 580 },
   nimsettings2: { name: 'Settings',        icon: '/icons/settings.png',    width: 880, height: 580 },
+  storage:      { name: 'Storage',         icon: '/icons/storage.png',     width: 900, height: 580 },
+  network:      { name: 'Network',         icon: '/icons/network.png',     width: 860, height: 560 },
   nimtorrent:   { name: 'NimTorrent',      icon: '/icons/nimtorrent.png',  width: 820, height: 520 },
   monitor:      { name: 'System Monitor',  icon: '/icons/monitor.png',     width: 700, height: 480 },
   containers:   { name: 'Containers',      icon: '/icons/containers.png',  width: 800, height: 520 },
