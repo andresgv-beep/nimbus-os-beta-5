@@ -283,10 +283,8 @@
               {#each usersList as u}
                 <div class="user-row">
                   <div class="user-avatar">{(u.username || '?')[0].toUpperCase()}</div>
-                  <div class="user-info">
-                    <div class="user-name">{u.username}</div>
-                    <div class="user-role-label">{u.role || 'user'}</div>
-                  </div>
+                  <span class="user-name">{u.username}</span>
+                  <span class="user-role-label">{u.role || 'user'}</span>
                   <div class="user-badge" class:admin={u.role === 'admin'}>{u.role || 'user'}</div>
                   <div class="row-actions">
                     <!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -686,14 +684,17 @@
   .btn-more:hover { color:var(--text-1); border-color:var(--border-hi); background:var(--active-bg); }
 
   /* ── Users ── */
-  .user-list { display:flex; flex-direction:column; gap:6px; }
-  .user-row { display:flex; align-items:center; gap:10px; padding:9px 10px; border-radius:8px; border:1px solid var(--border); background:var(--ibtn-bg); }
+  .user-list { display:flex; flex-direction:column; }
+  .user-row { display:flex; align-items:center; gap:12px; padding:10px 4px; border-bottom:1px solid var(--border); transition:background .12s; }
+  .user-row:first-child { border-top:1px solid var(--border); }
+  .user-row:hover { background:rgba(255,255,255,0.025); }
   .user-avatar { width:28px; height:28px; border-radius:7px; flex-shrink:0; background:linear-gradient(135deg,var(--accent),var(--accent2)); display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:700; color:#fff; }
-  .user-name { font-size:12px; font-weight:600; color:var(--text-1); }
-  .user-role-label { font-size:10px; color:var(--text-3); text-transform:uppercase; letter-spacing:.04em; }
-  .user-badge { margin-left:auto; padding:2px 7px; border-radius:4px; font-size:9px; font-weight:600; text-transform:uppercase; background:var(--ibtn-bg); border:1px solid var(--border); color:var(--text-3); }
+  .user-name { font-size:12px; font-weight:600; color:var(--text-1); min-width:80px; }
+  .user-role-label { font-size:10px; color:var(--text-3); text-transform:uppercase; letter-spacing:.04em; flex:1; }
+  .user-badge { padding:2px 7px; border-radius:4px; font-size:9px; font-weight:600; text-transform:uppercase; background:var(--ibtn-bg); border:1px solid var(--border); color:var(--text-3); flex-shrink:0; }
   .user-badge.admin { background:rgba(124,111,255,0.12); border-color:rgba(124,111,255,0.30); color:var(--accent); }
-  .row-actions { display:flex; gap:3px; }
+  .row-actions { display:flex; gap:3px; opacity:0; transition:opacity .15s; }
+  .user-row:hover .row-actions { opacity:1; }
   .action-btn { width:26px; height:26px; border-radius:6px; border:1px solid var(--border); background:transparent; color:var(--text-3); cursor:pointer; display:flex; align-items:center; justify-content:center; transition:all .15s; }
   .action-btn svg { width:12px; height:12px; }
   .action-btn:hover { color:var(--text-1); border-color:var(--border-hi); background:var(--ibtn-bg); }
