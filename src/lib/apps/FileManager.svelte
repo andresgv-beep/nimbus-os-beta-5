@@ -40,7 +40,44 @@
     try { const r = await fetch('/api/storage/status', { headers: hdrs() }); const d = await r.json(); if (d.pools?.length) storageInfo = d.pools[0]; } catch {}
   }
 
-  onMount(() => { fetchShares(); fetchStorage(); });
+  let gridEl;
+
+  onMount(() => {
+    fetchShares();
+    fetchStorage();
+
+    // Context menu nativo — más fiable que los eventos de Svelte
+    const handleCtx = (e) => {
+      const item = e.target.closest('.f-item');
+      if (!item) {
+        // Click derecho en fondo vacío
+        e.preventDefault();
+        if (clipboard && currentShare) {
+          ctxMenu = { x: e.clientX, y: e.clientY, file: null, idx: -1 };
+        }
+        return;
+      }
+      e.preventDefault();
+      const idx = parseInt(item.dataset.idx);
+      const file = sorted[idx];
+      if (!file) return;
+      if (!selected.has(idx)) selected = new Set([idx]);
+      ctxMenu = { x: e.clientX, y: e.clientY, file, idx };
+    };
+
+    const handleMouseDown = (e) => {
+      if (e.button === 2) return;
+      if (!e.target.closest('.ctx-menu')) closeCtx();
+    };
+
+    document.addEventListener('contextmenu', handleCtx);
+    document.addEventListener('mousedown', handleMouseDown);
+
+    return () => {
+      document.removeEventListener('contextmenu', handleCtx);
+      document.removeEventListener('mousedown', handleMouseDown);
+    };
+  });
   $: if (currentShare !== undefined) fetchFiles();
 
   function navigate(share, path) { currentShare = share; currentPath = path; closeCtx(); }
@@ -203,7 +240,7 @@
   }
 </script>
 
-<svelte:window on:mousedown={onWindowClick} on:keydown={(e) => {
+<svelte:window on:keydown={(e) => {
   if (e.key === 'Escape') { closeCtx(); renameModal = null; infoModal = null; }
   if (e.key === 'Enter' && renameModal) confirmRename();
 }} />
@@ -270,7 +307,7 @@
 
       <!-- FILE GRID -->
       <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div class="file-grid" on:contextmenu={onGridContextMenu}>
+      <div class="file-grid">
         {#if !currentShare}
           {#each shares as share}
             <!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -290,9 +327,9 @@
               class="f-item"
               class:sel={selected.has(i)}
               class:cut={clipboard?.op === 'cut' && clipboard?.path === filePath(file)}
+              data-idx={i}
               on:click={(e) => toggleSelect(i, e)}
               on:dblclick={() => openItem(file)}
-              on:contextmenu|stopPropagation={(e) => onContextMenu(e, file, i)}
             >
               <div class="f-icon">{fIcon(file)}</div>
               <div class="f-name">{file.name}</div>
