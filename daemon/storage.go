@@ -398,6 +398,7 @@ func getStoragePoolsGo() []map[string]interface{} {
 	conf := getStorageConfigFull()
 	raids := getRAIDStatusGo()
 	var pools []map[string]interface{}
+	configChanged := false
 
 	confPools, _ := conf["pools"].([]interface{})
 	primaryPool, _ := conf["primaryPool"].(string)
@@ -423,12 +424,54 @@ func getStoragePoolsGo() []map[string]interface{} {
 		filesystem, _ := poolConf["filesystem"].(string)
 		createdAt, _ := poolConf["createdAt"].(string)
 
-		// Find RAID array
+		// Find RAID array — first try by name, then by member disks
 		var raid map[string]interface{}
 		for _, r := range raids {
 			if r["name"] == arrayName {
 				raid = r
 				break
+			}
+		}
+		// If not found by name, search by disks (kernel may reassign md numbers on reboot)
+		if raid == nil && arrayName != "" {
+			poolDisks := map[string]bool{}
+			if pd, ok := poolConf["disks"].([]interface{}); ok {
+				for _, d := range pd {
+					if ds, ok := d.(string); ok {
+						// Extract base disk name: "/dev/sda" → "sda"
+						base := ds
+						if idx := strings.LastIndex(ds, "/"); idx >= 0 {
+							base = ds[idx+1:]
+						}
+						poolDisks[base] = true
+					}
+				}
+			}
+			if len(poolDisks) > 0 {
+				for _, r := range raids {
+					members, _ := r["members"].([]interface{})
+					matchCount := 0
+					for _, m := range members {
+						mm, _ := m.(map[string]interface{})
+						dev, _ := mm["device"].(string)
+						// Strip partition number: "sda1" → "sda"
+						devBase := strings.TrimRight(dev, "0123456789")
+						if poolDisks[devBase] {
+							matchCount++
+						}
+					}
+					if matchCount > 0 && matchCount >= len(poolDisks) {
+						raid = r
+						// Auto-update config with correct array name
+						newName, _ := r["name"].(string)
+						if newName != "" && newName != arrayName {
+							arrayName = newName
+							poolConf["arrayName"] = newName
+							configChanged = true
+						}
+						break
+					}
+				}
 			}
 		}
 
@@ -526,6 +569,13 @@ func getStoragePoolsGo() []map[string]interface{} {
 	if pools == nil {
 		pools = []map[string]interface{}{}
 	}
+
+	// Auto-save config if array names were corrected
+	if configChanged {
+		saveStorageConfigFull(conf)
+		logMsg("Storage config auto-updated (array names corrected)")
+	}
+
 	return pools
 }
 
