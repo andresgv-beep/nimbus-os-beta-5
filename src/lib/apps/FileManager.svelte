@@ -93,6 +93,7 @@
   function closeCtx() { ctxMenu = null; ctxTarget = null; }
 
   function onWindowClick(e) {
+    if (e.button === 2) return; // ignorar click derecho
     if (ctxMenu && !e.target.closest('.ctx-menu')) closeCtx();
     if (renameModal && !e.target.closest('.modal')) return;
   }
@@ -202,7 +203,7 @@
   }
 </script>
 
-<svelte:window on:click={onWindowClick} on:keydown={(e) => {
+<svelte:window on:mousedown={onWindowClick} on:keydown={(e) => {
   if (e.key === 'Escape') { closeCtx(); renameModal = null; infoModal = null; }
   if (e.key === 'Enter' && renameModal) confirmRename();
 }} />
@@ -291,7 +292,7 @@
               class:cut={clipboard?.op === 'cut' && clipboard?.path === filePath(file)}
               on:click={(e) => toggleSelect(i, e)}
               on:dblclick={() => openItem(file)}
-              on:contextmenu={(e) => onContextMenu(e, file, i)}
+              on:contextmenu|stopPropagation={(e) => onContextMenu(e, file, i)}
             >
               <div class="f-icon">{fIcon(file)}</div>
               <div class="f-name">{file.name}</div>
