@@ -243,28 +243,14 @@ func getSharePath(shareName string) (string, error) {
 // ═══════════════════════════════════
 
 type Request struct {
-	Op         string                 `json:"op"`
-	ShareName  string                 `json:"shareName,omitempty"`
-	PoolPath   string                 `json:"poolPath,omitempty"`
-	Username   string                 `json:"username,omitempty"`
-	Password   string                 `json:"password,omitempty"`
-	AppId      string                 `json:"appId,omitempty"`
-	Uid        interface{}            `json:"uid,omitempty"`
-	Permission string                 `json:"permission,omitempty"`
-	// DB operation fields
-	Role        string                 `json:"role,omitempty"`
-	Description string                 `json:"description,omitempty"`
-	Token       string                 `json:"token,omitempty"`
-	Ip          string                 `json:"ip,omitempty"`
-	Name        string                 `json:"name,omitempty"`
-	DisplayName string                 `json:"displayName,omitempty"`
-	Path        string                 `json:"path,omitempty"`
-	Volume      string                 `json:"volume,omitempty"`
-	Pool        string                 `json:"pool,omitempty"`
-	CreatedBy   string                 `json:"createdBy,omitempty"`
-	Key         string                 `json:"key,omitempty"`
-	Value       string                 `json:"value,omitempty"`
-	Fields      map[string]interface{} `json:"fields,omitempty"`
+	Op         string      `json:"op"`
+	ShareName  string      `json:"shareName,omitempty"`
+	PoolPath   string      `json:"poolPath,omitempty"`
+	Username   string      `json:"username,omitempty"`
+	Password   string      `json:"password,omitempty"`
+	AppId      string      `json:"appId,omitempty"`
+	Uid        interface{} `json:"uid,omitempty"`
+	Permission string      `json:"permission,omitempty"`
 }
 
 type Response struct {
@@ -483,192 +469,9 @@ func handleOp(req Request) Response {
 	case "system.reconcile":
 		return reconcile()
 
-	// ─── Database: Users ───
-
-	case "db.users.list":
-		users, err := dbUsersList()
-		if err != nil {
-			return Response{Error: err.Error()}
-		}
-		return Response{Ok: true, Data: users}
-
-	case "db.users.get":
-		if req.Username == "" {
-			return Response{Error: "username required"}
-		}
-		user, err := dbUsersGet(req.Username)
-		if err != nil {
-			return Response{Error: err.Error()}
-		}
-		return Response{Ok: true, Data: user}
-
-	case "db.users.create":
-		if req.Username == "" || req.Password == "" {
-			return Response{Error: "username and password required"}
-		}
-		if req.Role == "" {
-			req.Role = "user"
-		}
-		if err := dbUsersCreate(req.Username, req.Password, req.Role, req.Description); err != nil {
-			return Response{Error: err.Error()}
-		}
-		return Response{Ok: true}
-
-	case "db.users.update":
-		if req.Username == "" {
-			return Response{Error: "username required"}
-		}
-		if req.Fields == nil {
-			return Response{Error: "fields required"}
-		}
-		if err := dbUsersUpdate(req.Username, req.Fields); err != nil {
-			return Response{Error: err.Error()}
-		}
-		return Response{Ok: true}
-
-	case "db.users.delete":
-		if req.Username == "" {
-			return Response{Error: "username required"}
-		}
-		if err := dbUsersDelete(req.Username); err != nil {
-			return Response{Error: err.Error()}
-		}
-		return Response{Ok: true}
-
-	case "db.users.verify_password":
-		if req.Username == "" {
-			return Response{Error: "username required"}
-		}
-		pwd, err := dbUsersVerifyPassword(req.Username)
-		if err != nil {
-			return Response{Error: err.Error()}
-		}
-		return Response{Ok: true, Data: pwd}
-
-	// ─── Database: Sessions ───
-
-	case "db.sessions.create":
-		if req.Token == "" || req.Username == "" {
-			return Response{Error: "token and username required"}
-		}
-		if req.Role == "" {
-			req.Role = "user"
-		}
-		if err := dbSessionCreate(req.Token, req.Username, req.Role, req.Ip); err != nil {
-			return Response{Error: err.Error()}
-		}
-		return Response{Ok: true}
-
-	case "db.sessions.get":
-		if req.Token == "" {
-			return Response{Error: "token required"}
-		}
-		session, err := dbSessionGet(req.Token)
-		if err != nil {
-			return Response{Error: err.Error()}
-		}
-		return Response{Ok: true, Data: session}
-
-	case "db.sessions.delete":
-		if req.Token == "" {
-			return Response{Error: "token required"}
-		}
-		if err := dbSessionDelete(req.Token); err != nil {
-			return Response{Error: err.Error()}
-		}
-		return Response{Ok: true}
-
-	case "db.sessions.cleanup":
-		n := dbSessionCleanup()
-		return Response{Ok: true, Data: n}
-
-	// ─── Database: Shares ───
-
-	case "db.shares.list":
-		shares, err := dbSharesList()
-		if err != nil {
-			return Response{Error: err.Error()}
-		}
-		return Response{Ok: true, Data: shares}
-
-	case "db.shares.get":
-		if req.Name == "" {
-			return Response{Error: "name required"}
-		}
-		share, err := dbSharesGet(req.Name)
-		if err != nil {
-			return Response{Error: err.Error()}
-		}
-		return Response{Ok: true, Data: share}
-
-	case "db.shares.create":
-		if req.Name == "" || req.Path == "" {
-			return Response{Error: "name and path required"}
-		}
-		if err := dbSharesCreate(req.Name, req.DisplayName, req.Description, req.Path, req.Volume, req.Pool, req.CreatedBy); err != nil {
-			return Response{Error: err.Error()}
-		}
-		return Response{Ok: true}
-
-	case "db.shares.update":
-		if req.Name == "" {
-			return Response{Error: "name required"}
-		}
-		if req.Fields == nil {
-			return Response{Error: "fields required"}
-		}
-		if err := dbSharesUpdate(req.Name, req.Fields); err != nil {
-			return Response{Error: err.Error()}
-		}
-		return Response{Ok: true}
-
-	case "db.shares.delete":
-		if req.Name == "" {
-			return Response{Error: "name required"}
-		}
-		if err := dbSharesDelete(req.Name); err != nil {
-			return Response{Error: err.Error()}
-		}
-		return Response{Ok: true}
-
-	case "db.shares.set_permission":
-		if req.ShareName == "" || req.Username == "" {
-			return Response{Error: "shareName and username required"}
-		}
-		if err := dbShareSetPermission(req.ShareName, req.Username, req.Permission); err != nil {
-			return Response{Error: err.Error()}
-		}
-		return Response{Ok: true}
-
-	// ─── Database: Preferences ───
-
-	case "db.prefs.get":
-		if req.Username == "" {
-			return Response{Error: "username required"}
-		}
-		prefs, err := dbPrefsGet(req.Username)
-		if err != nil {
-			return Response{Error: err.Error()}
-		}
-		return Response{Ok: true, Data: prefs}
-
-	case "db.prefs.set":
-		if req.Username == "" || req.Key == "" {
-			return Response{Error: "username and key required"}
-		}
-		if err := dbPrefsSet(req.Username, req.Key, req.Value); err != nil {
-			return Response{Error: err.Error()}
-		}
-		return Response{Ok: true}
-
-	case "db.prefs.delete":
-		if req.Username == "" || req.Key == "" {
-			return Response{Error: "username and key required"}
-		}
-		if err := dbPrefsDelete(req.Username, req.Key); err != nil {
-			return Response{Error: err.Error()}
-		}
-		return Response{Ok: true}
+	// ─── NOTE: Database operations (db.*) removed from privileged daemon ───
+	// HTTP handlers call db functions directly (dbUsersList, dbSharesGet, etc.)
+	// The daemon socket only handles privileged OS operations (users, shares, ACLs)
 
 	default:
 		logMsg("rejected unknown op: %s", req.Op)
