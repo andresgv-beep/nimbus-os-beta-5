@@ -46,18 +46,16 @@
     fetchShares();
     fetchStorage();
 
-    // Context menu nativo — más fiable que los eventos de Svelte
     const handleCtx = (e) => {
+      if (!gridEl || !gridEl.contains(e.target)) return;
       const item = e.target.closest('.f-item');
+      e.preventDefault();
       if (!item) {
-        // Click derecho en fondo vacío
-        e.preventDefault();
         if (clipboard && currentShare) {
           ctxMenu = { x: e.clientX, y: e.clientY, file: null, idx: -1 };
         }
         return;
       }
-      e.preventDefault();
       const idx = parseInt(item.dataset.idx);
       const file = sorted[idx];
       if (!file) return;
@@ -70,11 +68,11 @@
       if (!e.target.closest('.ctx-menu')) closeCtx();
     };
 
-    document.addEventListener('contextmenu', handleCtx);
+    gridEl.addEventListener('contextmenu', handleCtx);
     document.addEventListener('mousedown', handleMouseDown);
 
     return () => {
-      document.removeEventListener('contextmenu', handleCtx);
+      gridEl.removeEventListener('contextmenu', handleCtx);
       document.removeEventListener('mousedown', handleMouseDown);
     };
   });
@@ -307,7 +305,7 @@
 
       <!-- FILE GRID -->
       <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div class="file-grid">
+      <div class="file-grid" bind:this={gridEl}>
         {#if !currentShare}
           {#each shares as share}
             <!-- svelte-ignore a11y_click_events_have_key_events -->
