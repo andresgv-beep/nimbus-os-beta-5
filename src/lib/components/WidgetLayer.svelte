@@ -647,8 +647,6 @@
       {/if}
     {/each}
 
-    <!-- Add button -->{/if}
-    </div>
   {/if}
 </div>
 
