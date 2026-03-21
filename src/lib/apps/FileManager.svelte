@@ -50,9 +50,15 @@
       if (!gridEl || !gridEl.contains(e.target)) return;
       const item = e.target.closest('.f-item');
       e.preventDefault();
+
+      // Clamp menu position to stay within viewport
+      const menuW = 190, menuH = 280; // approximate menu size
+      const x = Math.min(e.clientX, window.innerWidth - menuW - 8);
+      const y = Math.min(e.clientY, window.innerHeight - menuH - 8);
+
       if (!item) {
         if (clipboard && currentShare) {
-          ctxMenu = { x: e.clientX, y: e.clientY, file: null, idx: -1 };
+          ctxMenu = { x, y, file: null, idx: -1 };
         }
         return;
       }
@@ -60,7 +66,7 @@
       const file = sorted[idx];
       if (!file) return;
       if (!selected.has(idx)) selected = new Set([idx]);
-      ctxMenu = { x: e.clientX, y: e.clientY, file, idx };
+      ctxMenu = { x, y, file, idx };
     };
 
     const handleMouseDown = (e) => {
