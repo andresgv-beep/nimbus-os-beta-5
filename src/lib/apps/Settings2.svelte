@@ -71,7 +71,7 @@
 
   // Wallpapers añadidos por el usuario (guardados en prefs)
   $: userWallpapers = $prefs.userWallpapers || [];
-  $: allWallpapers = [...BUILTIN_WALLPAPERS, ...userWallpapers];
+  $: allWallpapers = [...BUILTIN_WALLPAPERS, ...userWallpapers.filter(w => !BUILTIN_WALLPAPERS.includes(w))];
   $: currentWallpaper = $prefs.wallpaper || '';
 
   function selectWallpaper(url) {
@@ -978,11 +978,13 @@
     aspect-ratio:16/9; cursor:pointer;
     border:2px solid transparent;
     transition:all .15s;
+    height:0; padding-bottom:56.25%; /* fuerza ratio 16/9 independiente del ancho */
   }
   .wall-item:hover { border-color:rgba(255,255,255,0.2); }
   .wall-item.active { border-color:var(--accent); }
 
-  .wall-thumb { width:100%; height:100%; object-fit:cover; display:block; }
+  .wall-thumb { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; display:block; }
+  .wall-none { position:absolute; inset:0; }
 
   .wall-none {
     width:100%; height:100%;
