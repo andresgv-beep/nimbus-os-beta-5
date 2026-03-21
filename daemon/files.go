@@ -249,6 +249,9 @@ func filesMkdir(w http.ResponseWriter, r *http.Request, session map[string]inter
 		jsonError(w, 404, "Shared folder not found")
 		return
 	}
+	if !requireShareMounted(w, share) {
+		return
+	}
 	if getSharePermission(session, share) != "rw" {
 		jsonError(w, 403, "Write access denied")
 		return
@@ -287,6 +290,9 @@ func filesDelete(w http.ResponseWriter, r *http.Request, session map[string]inte
 		jsonError(w, 404, "Shared folder not found")
 		return
 	}
+	if !requireShareMounted(w, share) {
+		return
+	}
 	if getSharePermission(session, share) != "rw" {
 		jsonError(w, 403, "Write access denied")
 		return
@@ -305,6 +311,10 @@ func filesDelete(w http.ResponseWriter, r *http.Request, session map[string]inte
 		return
 	}
 
+	if _, serr := os.Stat(fullPath); serr != nil {
+		jsonError(w, 404, "File not found")
+		return
+	}
 	if err := os.RemoveAll(fullPath); err != nil {
 		jsonError(w, 500, err.Error())
 		return
@@ -330,6 +340,9 @@ func filesRename(w http.ResponseWriter, r *http.Request, session map[string]inte
 	share, _ := dbSharesGet(shareName)
 	if share == nil {
 		jsonError(w, 404, "Shared folder not found")
+		return
+	}
+	if !requireShareMounted(w, share) {
 		return
 	}
 	if getSharePermission(session, share) != "rw" {
@@ -377,6 +390,9 @@ func filesPaste(w http.ResponseWriter, r *http.Request, session map[string]inter
 	destShare, _ := dbSharesGet(destShareName)
 	if srcShare == nil || destShare == nil {
 		jsonError(w, 404, "Share not found")
+		return
+	}
+	if !requireShareMounted(w, destShare) {
 		return
 	}
 
