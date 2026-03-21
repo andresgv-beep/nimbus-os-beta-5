@@ -134,11 +134,13 @@ func handleTorrentProxy(w http.ResponseWriter, r *http.Request) {
 
 	// Regular proxy to NimTorrent
 	daemonPath := strings.Replace(urlPath, "/api/torrent", "", 1)
-	if daemonPath == "" {
+	if daemonPath == "" || daemonPath == "/" {
 		daemonPath = "/torrents"
 	}
-	if !strings.HasPrefix(daemonPath, "/") {
-		daemonPath = "/" + daemonPath
+	// torrentd expects /torrent/add, /torrent/pause, etc.
+	// but /torrents and /stats are root-level
+	if daemonPath != "/torrents" && daemonPath != "/stats" && daemonPath != "/settings" && daemonPath != "/save" && !strings.HasPrefix(daemonPath, "/torrent/") {
+		daemonPath = "/torrent" + daemonPath
 	}
 
 	// Read body
