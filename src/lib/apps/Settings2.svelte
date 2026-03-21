@@ -875,7 +875,7 @@
   .theme-card { cursor:pointer; display:flex; flex-direction:column; align-items:center; gap:8px; padding:8px; border-radius:10px; border:2px solid transparent; transition:all .2s; }
   .theme-card:hover { border-color:var(--border); }
   .theme-card.active { border-color:var(--accent); }
-  .theme-preview { width:110px; height:66px; border-radius:7px; overflow:hidden; display:flex; border:1px solid rgba(128,128,128,0.15); }
+  .theme-preview { width:150px; height:90px; border-radius:7px; overflow:hidden; display:flex; border:1px solid rgba(128,128,128,0.15); }
   .theme-preview.midnight { background:#111028; } .theme-preview.dark { background:#181818; } .theme-preview.light { background:#ebebef; }
   .tp-sidebar { width:30%; height:100%; }
   .theme-preview.midnight .tp-sidebar { background:#0d0b20; } .theme-preview.dark .tp-sidebar { background:#141414; } .theme-preview.light .tp-sidebar { background:#e0e0e4; }
@@ -967,8 +967,8 @@
 
   .wall-grid {
     display:grid; grid-template-columns:repeat(3,1fr); gap:8px;
-    grid-auto-rows:120px;
-    max-height:280px; overflow-y:auto;
+    grid-auto-rows:100px;
+    max-height:320px; overflow-y:auto;
     padding-right:4px;
   }
   .wall-grid::-webkit-scrollbar { width:3px; }
@@ -976,15 +976,17 @@
 
   .wall-item {
     position:relative; border-radius:8px; overflow:hidden;
-    cursor:pointer; height:120px;
+    cursor:pointer;
+    height:100px; min-height:100px; max-height:100px;
     border:2px solid transparent;
     transition:all .15s;
+    flex-shrink:0;
   }
   .wall-item:hover { border-color:rgba(255,255,255,0.2); }
   .wall-item.active { border-color:var(--accent); }
 
-  .wall-thumb { width:100%; height:100%; object-fit:cover; display:block; }
-  .wall-none { width:100%; height:100%; display:flex; align-items:center; justify-content:center; background:rgba(255,255,255,0.04); }
+  .wall-thumb { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; display:block; }
+  .wall-none { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; background:rgba(255,255,255,0.04); }
 
   .wall-none {
     width:100%; height:100%;
