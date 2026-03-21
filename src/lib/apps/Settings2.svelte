@@ -60,6 +60,7 @@
   let updatePollId   = null;
 
   // ── Appearance ──
+  let appearanceTab = 'tema';
   $: currentTheme  = $prefs.theme       || 'midnight';
   $: currentAccent = $prefs.accentColor || 'orange';
   const themeLabels = { midnight: 'Midnight', dark: 'Dark', light: 'Light' };
@@ -386,28 +387,110 @@
           {#if applying}<div class="update-progress"><div class="spinner" style="width:16px;height:16px"></div><span>No cierres el navegador</span></div>{/if}
 
         {:else if activeView === 'appearance'}
-          <div class="section-label">Tema del sistema</div>
-          <div class="theme-row">
-            {#each ['midnight', 'dark', 'light'] as t}
-              <!-- svelte-ignore a11y_click_events_have_key_events -->
-              <!-- svelte-ignore a11y_no_static_element_interactions -->
-              <div class="theme-card" class:active={currentTheme === t} on:click={() => setPref('theme', t)}>
-                <div class="theme-preview {t}">
-                  <div class="tp-sidebar"></div>
-                  <div class="tp-content"><div class="tp-bar"></div><div class="tp-line"></div><div class="tp-line short"></div></div>
+          <!-- Sub-tabs de apariencia -->
+          <div class="sub-tabs">
+            <!-- svelte-ignore a11y_click_events_have_key_events -->
+            <!-- svelte-ignore a11y_no_static_element_interactions -->
+            <div class="sub-tab" class:active={appearanceTab === 'tema'} on:click={() => appearanceTab = 'tema'}>Tema</div>
+            <!-- svelte-ignore a11y_click_events_have_key_events -->
+            <!-- svelte-ignore a11y_no_static_element_interactions -->
+            <div class="sub-tab" class:active={appearanceTab === 'taskbar'} on:click={() => appearanceTab = 'taskbar'}>Taskbar</div>
+            <!-- svelte-ignore a11y_click_events_have_key_events -->
+            <!-- svelte-ignore a11y_no_static_element_interactions -->
+            <div class="sub-tab" class:active={appearanceTab === 'escala'} on:click={() => appearanceTab = 'escala'}>Escala</div>
+            <!-- svelte-ignore a11y_click_events_have_key_events -->
+            <!-- svelte-ignore a11y_no_static_element_interactions -->
+            <div class="sub-tab" class:active={appearanceTab === 'fondos'} on:click={() => appearanceTab = 'fondos'}>Fondos</div>
+          </div>
+
+          {#if appearanceTab === 'tema'}
+            <div class="section-label">Tema del sistema</div>
+            <div class="theme-row">
+              {#each ['midnight', 'dark', 'light'] as t}
+                <!-- svelte-ignore a11y_click_events_have_key_events -->
+                <!-- svelte-ignore a11y_no_static_element_interactions -->
+                <div class="theme-card" class:active={currentTheme === t} on:click={() => setPref('theme', t)}>
+                  <div class="theme-preview {t}">
+                    <div class="tp-sidebar"></div>
+                    <div class="tp-content"><div class="tp-bar"></div><div class="tp-line"></div><div class="tp-line short"></div></div>
+                  </div>
+                  <div class="theme-label">{themeLabels[t]}</div>
                 </div>
-                <div class="theme-label">{themeLabels[t]}</div>
+              {/each}
+            </div>
+            <div class="section-label" style="margin-top:24px">Color de acento</div>
+            <div class="accent-row">
+              {#each Object.entries(ACCENT_COLORS) as [name, color]}
+                <!-- svelte-ignore a11y_click_events_have_key_events -->
+                <!-- svelte-ignore a11y_no_static_element_interactions -->
+                <div class="accent-dot" class:active={currentAccent === name} style="background:{color}" on:click={() => setPref('accentColor', name)} title={name}></div>
+              {/each}
+            </div>
+
+          {:else if appearanceTab === 'taskbar'}
+            <div class="section-label">Estilo</div>
+            <div class="setting-row">
+              <span class="setting-label">Modo</span>
+              <div class="setting-options">
+                <!-- svelte-ignore a11y_click_events_have_key_events -->
+                <!-- svelte-ignore a11y_no_static_element_interactions -->
+                <button class="opt-btn" class:active={$prefs.taskbarMode === 'classic'} on:click={() => setPref('taskbarMode', 'classic')}>Clásico</button>
+                <!-- svelte-ignore a11y_click_events_have_key_events -->
+                <!-- svelte-ignore a11y_no_static_element_interactions -->
+                <button class="opt-btn" class:active={$prefs.taskbarMode === 'dock'} on:click={() => setPref('taskbarMode', 'dock')}>Dock</button>
               </div>
-            {/each}
-          </div>
-          <div class="section-label" style="margin-top:24px">Color de acento</div>
-          <div class="accent-row">
-            {#each Object.entries(ACCENT_COLORS) as [name, color]}
-              <!-- svelte-ignore a11y_click_events_have_key_events -->
-              <!-- svelte-ignore a11y_no_static_element_interactions -->
-              <div class="accent-dot" class:active={currentAccent === name} style="background:{color}" on:click={() => setPref('accentColor', name)} title={name}></div>
-            {/each}
-          </div>
+            </div>
+            <div class="section-label" style="margin-top:16px">Posición</div>
+            <div class="setting-row">
+              <span class="setting-label">Posición</span>
+              <div class="setting-options">
+                {#each ['bottom', 'top', 'left'] as pos}
+                  <!-- svelte-ignore a11y_click_events_have_key_events -->
+                  <!-- svelte-ignore a11y_no_static_element_interactions -->
+                  <button class="opt-btn"
+                    class:active={$prefs.taskbarPosition === pos}
+                    disabled={$prefs.taskbarMode === 'dock' && pos === 'left'}
+                    on:click={() => setPref('taskbarPosition', pos)}>
+                    {pos === 'bottom' ? 'Abajo' : pos === 'top' ? 'Arriba' : 'Izquierda'}
+                  </button>
+                {/each}
+              </div>
+            </div>
+            <div class="setting-row">
+              <span class="setting-label">Tamaño</span>
+              <div class="setting-options">
+                {#each ['small', 'medium', 'large'] as size}
+                  <!-- svelte-ignore a11y_click_events_have_key_events -->
+                  <!-- svelte-ignore a11y_no_static_element_interactions -->
+                  <button class="opt-btn" class:active={$prefs.taskbarSize === size} on:click={() => setPref('taskbarSize', size)}>
+                    {size === 'small' ? 'Pequeño' : size === 'medium' ? 'Medio' : 'Grande'}
+                  </button>
+                {/each}
+              </div>
+            </div>
+
+          {:else if appearanceTab === 'escala'}
+            <div class="section-label">Escala de interfaz</div>
+            <div class="setting-row">
+              <span class="setting-label">Escala UI</span>
+              <div class="setting-options">
+                {#each [{v:'auto',l:'Auto'},{v:85,l:'85%'},{v:100,l:'100%'},{v:115,l:'115%'},{v:125,l:'125%'},{v:150,l:'150%'}] as opt}
+                  <!-- svelte-ignore a11y_click_events_have_key_events -->
+                  <!-- svelte-ignore a11y_no_static_element_interactions -->
+                  <button class="opt-btn" class:active={$prefs.uiScale === opt.v} on:click={() => setPref('uiScale', opt.v)}>
+                    {opt.l}
+                  </button>
+                {/each}
+              </div>
+            </div>
+            <div style="font-size:10px;color:var(--text-3);margin-top:8px;font-family:'DM Mono',monospace">
+              Pantalla: {typeof window !== 'undefined' ? `${window.screen.width}×${window.screen.height}` : '—'} · DPR: {typeof window !== 'undefined' ? window.devicePixelRatio?.toFixed(2) : '—'} · CSS: {typeof window !== 'undefined' ? `${window.innerWidth}×${window.innerHeight}` : '—'}
+            </div>
+
+          {:else if appearanceTab === 'fondos'}
+            <div class="section-label">Fondos de escritorio</div>
+            <p class="coming-soon">Wallpaper selector — coming soon</p>
+          {/if}
 
         {:else if activeView === 'about'}
           <div class="section-label">Acerca de NimOS</div>
@@ -790,4 +873,13 @@
   /* ── Statusbar ── */
   .statusbar { display:flex; align-items:center; gap:10px; padding:8px 16px; border-top:1px solid var(--border); background:var(--bg-bar); flex-shrink:0; font-size:10px; color:var(--text-3); border-radius:0 0 10px 10px; font-family:'DM Mono',monospace; }
   .status-dot { width:6px; height:6px; border-radius:50%; background:var(--green); box-shadow:0 0 4px rgba(74,222,128,0.6); }
+
+  /* ── Appearance settings ── */
+  .setting-row { display:flex; align-items:center; justify-content:space-between; padding:10px 0; border-bottom:1px solid var(--border); }
+  .setting-label { font-size:12px; color:var(--text-2); }
+  .setting-options { display:flex; gap:4px; flex-wrap:wrap; }
+  .opt-btn { padding:5px 12px; border-radius:6px; font-size:11px; border:1px solid var(--border); background:var(--ibtn-bg); color:var(--text-2); cursor:pointer; font-family:inherit; transition:all .15s; }
+  .opt-btn:hover { color:var(--text-1); }
+  .opt-btn.active { background:var(--active-bg); border-color:var(--border-hi); color:var(--text-1); }
+  .opt-btn:disabled { opacity:.4; cursor:not-allowed; }
 </style>
