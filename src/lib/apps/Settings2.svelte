@@ -967,6 +967,7 @@
 
   .wall-grid {
     display:grid; grid-template-columns:repeat(3,1fr); gap:8px;
+    grid-auto-rows:120px;
     max-height:280px; overflow-y:auto;
     padding-right:4px;
   }
@@ -975,16 +976,15 @@
 
   .wall-item {
     position:relative; border-radius:8px; overflow:hidden;
-    aspect-ratio:16/9; cursor:pointer;
+    cursor:pointer; height:120px;
     border:2px solid transparent;
     transition:all .15s;
-    height:0; padding-bottom:56.25%; /* fuerza ratio 16/9 independiente del ancho */
   }
   .wall-item:hover { border-color:rgba(255,255,255,0.2); }
   .wall-item.active { border-color:var(--accent); }
 
-  .wall-thumb { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; display:block; }
-  .wall-none { position:absolute; inset:0; }
+  .wall-thumb { width:100%; height:100%; object-fit:cover; display:block; }
+  .wall-none { width:100%; height:100%; display:flex; align-items:center; justify-content:center; background:rgba(255,255,255,0.04); }
 
   .wall-none {
     width:100%; height:100%;
