@@ -966,8 +966,10 @@
   .wall-add-btn:hover { color:var(--text-1); border-color:var(--border-hi); }
 
   .wall-grid {
-    display:grid; grid-template-columns:repeat(3,1fr); gap:8px;
+    display:grid;
+    grid-template-columns:repeat(3,1fr);
     grid-auto-rows:100px;
+    gap:8px;
     max-height:320px; overflow-y:auto;
     padding-right:4px;
   }
@@ -977,15 +979,19 @@
   .wall-item {
     position:relative; border-radius:8px; overflow:hidden;
     cursor:pointer;
-    height:100px; min-height:100px; max-height:100px;
     border:2px solid transparent;
     transition:all .15s;
-    flex-shrink:0;
+    /* forzar altura — el grid-auto-rows lo controla */
+    min-height:0; min-width:0;
   }
   .wall-item:hover { border-color:rgba(255,255,255,0.2); }
   .wall-item.active { border-color:var(--accent); }
 
-  .wall-thumb { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; display:block; }
+  .wall-thumb {
+    display:block; width:100%; height:100%;
+    object-fit:cover;
+    position:absolute; inset:0;
+  }
   .wall-none { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; background:rgba(255,255,255,0.04); }
 
   .wall-none {
