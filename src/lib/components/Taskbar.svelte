@@ -15,7 +15,10 @@
   function openCtxMenu(e, appId, win = null) {
     e.preventDefault();
     e.stopPropagation();
-    ctxMenu = { appId, x: e.clientX, y: e.clientY, win };
+    const menuW = 210, menuH = 250;
+    const x = Math.min(e.clientX, window.innerWidth - menuW - 8);
+    const y = Math.max(8, e.clientY - menuH);
+    ctxMenu = { appId, x, y, win };
   }
 
   function closeCtxMenu() { ctxMenu = null; }
@@ -466,12 +469,10 @@
     box-shadow: 0 16px 40px rgba(0,0,0,0.45), 0 2px 8px rgba(0,0,0,0.2);
     overflow: hidden;
     animation: ctxIn .12s cubic-bezier(0.16,1,0.3,1) both;
-    /* Flip up if near bottom */
-    transform: translateY(-100%);
   }
   @keyframes ctxIn {
-    from { opacity:0; transform:translateY(calc(-100% + 6px)) scale(0.97); }
-    to   { opacity:1; transform:translateY(-100%) scale(1); }
+    from { opacity:0; transform:translateY(6px) scale(0.97); }
+    to   { opacity:1; transform:translateY(0) scale(1); }
   }
   .ctx-header {
     display: flex; align-items: center; gap: 8px;
