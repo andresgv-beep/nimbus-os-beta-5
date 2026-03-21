@@ -647,26 +647,7 @@
       {/if}
     {/each}
 
-    <!-- Add button -->
-    <div class="wa-wrap">
-      <button class="wa-btn" on:click={(e) => { e.stopPropagation(); activeMenu = activeMenu?.widgetId==='_add' ? null : { widgetId:'_add', x:0, y:0, sub:null }; }}>
-        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-          <path d="M7 1v12M1 7h12"/>
-        </svg>
-      </button>
-      {#if activeMenu?.widgetId === '_add'}
-        <!-- svelte-ignore a11y_no_static_element_interactions -->
-        <div class="wa-menu" on:click|stopPropagation>
-          <div class="ctx-header-label">Añadir widget</div>
-          {#each Object.entries(WIDGET_TYPES) as [type, meta]}
-            <!-- svelte-ignore a11y_click_events_have_key_events -->
-            <div class="wa-item" on:click={() => addWidget(type)}>
-              <span style="font-size:16px">{meta.icon}</span>
-              <span class="wa-item-name">{meta.name}</span>
-            </div>
-          {/each}
-        </div>
-      {/if}
+    <!-- Add button -->{/if}
     </div>
   {/if}
 </div>
