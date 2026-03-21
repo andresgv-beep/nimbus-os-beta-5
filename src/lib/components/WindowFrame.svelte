@@ -126,10 +126,6 @@
       {#await import('$lib/apps/Settings.svelte') then module}
         <svelte:component this={module.default} />
       {/await}
-    {:else if win.appId === 'nimsettings2'}
-      {#await import('$lib/apps/Settings2.svelte') then module}
-        <svelte:component this={module.default} />
-      {/await}
     {:else if win.appId === 'nimtorrent'}
       {#await import('$lib/apps/NimTorrent.svelte') then module}
         <svelte:component this={module.default} />
@@ -138,8 +134,20 @@
       {#await import('$lib/apps/AppStore.svelte') then module}
         <svelte:component this={module.default} />
       {/await}
+    {:else if win.appId === 'storage'}
+      {#await import('$lib/apps/StoragePanel.svelte') then module}
+        <svelte:component this={module.default} />
+      {/await}
+    {:else if win.appId === 'network'}
+      {#await import('$lib/apps/NetworkPanel.svelte') then module}
+        <svelte:component this={module.default} />
+      {/await}
     {:else if win.appId === 'mediaplayer'}
       {#await import('$lib/apps/MediaPlayer.svelte') then module}
+        <svelte:component this={module.default} />
+      {/await}
+    {:else if win.appId === 'nimsettings2'}
+      {#await import('$lib/apps/Settings2.svelte') then module}
         <svelte:component this={module.default} />
       {/await}
     {:else}
