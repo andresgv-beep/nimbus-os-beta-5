@@ -45,6 +45,15 @@
   let shareMsgError = false;
   let permsSub    = 'sharefolders'; // sharefolders | apppermissions
 
+  // ── App Permissions state ──
+  let appPermUsers = [];
+  let appPermApps = [];
+  let appPermGrants = [];  // all grants from DB
+  let appPermLoading = false;
+  let appPermSelectedUser = null;
+  let appPermMsg = '';
+  let appPermMsgError = false;
+
   // ── Users state ──
   let usersList    = [];
   let editingUser  = null;
@@ -317,6 +326,58 @@
     } catch { twofaMsg = 'Error desactivando 2FA'; twofaMsgError = true; }
     twofaSaving = false;
   }
+
+  // ── App Permissions ──
+  async function loadAppPermissions() {
+    appPermLoading = true; appPermMsg = '';
+    try {
+      const [ur, ar, gr] = await Promise.all([
+        fetch('/api/users',            { headers: hdrs() }),
+        fetch('/api/app-access/apps',  { headers: hdrs() }),
+        fetch('/api/app-access',       { headers: hdrs() }),
+      ]);
+      const ud = await ur.json(); appPermUsers = (ud.users || ud || []).filter(u => u.role !== 'admin');
+      const ad = await ar.json(); appPermApps  = (ad.apps || []).filter(a => !a.public && !a.adminOnly);
+      const gd = await gr.json(); appPermGrants = gd.grants || [];
+    } catch(e) { console.error('[AppPerms] load failed', e); }
+    appPermLoading = false;
+  }
+
+  // Check if user has grant for app
+  function hasGrant(username, appId) {
+    return appPermGrants.some(g => g.username === username && g.appId === appId);
+  }
+
+  function getGrantPerm(username, appId) {
+    const g = appPermGrants.find(g => g.username === username && g.appId === appId);
+    return g?.permission || '';
+  }
+
+  async function toggleAppAccess(username, appId) {
+    appPermMsg = '';
+    try {
+      if (hasGrant(username, appId)) {
+        await fetch('/api/app-access', {
+          method: 'DELETE',
+          headers: { ...hdrs(), 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, appId }),
+        });
+      } else {
+        await fetch('/api/app-access', {
+          method: 'POST',
+          headers: { ...hdrs(), 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, appId, permission: 'use' }),
+        });
+      }
+      // Reload grants
+      const gr = await fetch('/api/app-access', { headers: hdrs() });
+      const gd = await gr.json();
+      appPermGrants = gd.grants || [];
+    } catch { appPermMsg = 'Error actualizando permiso'; appPermMsgError = true; }
+  }
+
+  // Reactive: load app perms when switching to that sub-tab
+  $: if (permsSub === 'apppermissions' && appPermApps.length === 0) loadAppPermissions();
 </script>
 
 <div class="s2-root">
@@ -482,7 +543,51 @@
 
           {:else}
             <div class="section-label">Permisos de aplicaciones</div>
-            <p class="coming-soon">App permissions — coming soon</p>
+            <p class="appperm-desc">Controla qué aplicaciones puede usar cada usuario. Los administradores siempre tienen acceso total. Files y Media Player son públicas por defecto.</p>
+
+            {#if appPermLoading}
+              <div class="s-loading"><div class="spinner"></div></div>
+            {:else if appPermUsers.length === 0}
+              <div class="empty-state">
+                <div class="empty-icon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>
+                </div>
+                <div class="empty-title">Sin usuarios</div>
+                <div class="empty-desc">Crea usuarios no-admin para gestionar sus permisos de aplicaciones.</div>
+              </div>
+            {:else}
+              <div class="appperm-grid">
+                <!-- Header row -->
+                <div class="appperm-header">
+                  <div class="appperm-user-col">Usuario</div>
+                  {#each appPermApps as app}
+                    <div class="appperm-app-col" title={app.name}>{app.name}</div>
+                  {/each}
+                </div>
+                <!-- User rows -->
+                {#each appPermUsers as u}
+                  <div class="appperm-row">
+                    <div class="appperm-user-col">
+                      <span class="appperm-avatar">{(u.username || '?')[0].toUpperCase()}</span>
+                      <span class="appperm-username">{u.username}</span>
+                    </div>
+                    {#each appPermApps as app}
+                      <div class="appperm-app-col">
+                        <!-- svelte-ignore a11y_click_events_have_key_events -->
+                        <!-- svelte-ignore a11y_no_static_element_interactions -->
+                        <div class="appperm-toggle" class:on={hasGrant(u.username, app.id)} on:click={() => toggleAppAccess(u.username, app.id)} title={hasGrant(u.username, app.id) ? 'Revocar acceso' : 'Dar acceso'}>
+                          <div class="appperm-toggle-dot"></div>
+                        </div>
+                      </div>
+                    {/each}
+                  </div>
+                {/each}
+              </div>
+              {#if appPermMsg}
+                <div class="appperm-msg" class:error={appPermMsgError}>{appPermMsg}</div>
+              {/if}
+              <button class="btn-secondary" style="margin-top:12px" on:click={loadAppPermissions}>↻ Recargar</button>
+            {/if}
           {/if}
 
         {:else if activeView === 'portal'}
@@ -1310,4 +1415,64 @@
   .btn-link:hover { color:var(--text-1); }
 
   .portal-sep { height:1px; background:var(--border); margin:20px 0; }
+
+  /* ── App Permissions ── */
+  .appperm-desc { font-size:11px; color:var(--text-3); margin-bottom:16px; line-height:1.5; }
+  .appperm-grid { border:1px solid var(--border); border-radius:8px; overflow:hidden; overflow-x:auto; }
+  .appperm-header {
+    display:flex; align-items:center;
+    background:var(--bg-bar); border-bottom:1px solid var(--border);
+    padding:8px 0; min-width:fit-content;
+  }
+  .appperm-header .appperm-user-col {
+    font-size:9px; font-weight:600; color:var(--text-3);
+    text-transform:uppercase; letter-spacing:.06em;
+  }
+  .appperm-header .appperm-app-col {
+    font-size:9px; font-weight:600; color:var(--text-3);
+    text-transform:uppercase; letter-spacing:.04em;
+    text-align:center;
+  }
+  .appperm-row {
+    display:flex; align-items:center;
+    padding:8px 0; border-bottom:1px solid var(--border);
+    transition:background .12s; min-width:fit-content;
+  }
+  .appperm-row:last-child { border-bottom:none; }
+  .appperm-row:hover { background:rgba(255,255,255,0.02); }
+  .appperm-user-col {
+    width:140px; flex-shrink:0; padding:0 12px;
+    display:flex; align-items:center; gap:8px;
+  }
+  .appperm-app-col {
+    width:90px; flex-shrink:0;
+    display:flex; align-items:center; justify-content:center;
+  }
+  .appperm-avatar {
+    width:22px; height:22px; border-radius:5px; flex-shrink:0;
+    background:linear-gradient(135deg, var(--accent), var(--accent2));
+    display:flex; align-items:center; justify-content:center;
+    font-size:9px; font-weight:700; color:#fff;
+  }
+  .appperm-username { font-size:11px; font-weight:600; color:var(--text-1); }
+
+  .appperm-toggle {
+    width:32px; height:18px; border-radius:10px; cursor:pointer;
+    background:rgba(128,128,128,0.20); border:1px solid var(--border);
+    position:relative; transition:all .2s;
+  }
+  .appperm-toggle.on {
+    background:rgba(74,222,128,0.25); border-color:rgba(74,222,128,0.40);
+  }
+  .appperm-toggle-dot {
+    position:absolute; top:2px; left:2px;
+    width:12px; height:12px; border-radius:50%;
+    background:var(--text-3); transition:all .2s;
+  }
+  .appperm-toggle.on .appperm-toggle-dot {
+    left:16px; background:var(--green);
+  }
+
+  .appperm-msg { font-size:11px; margin-top:8px; color:var(--green); }
+  .appperm-msg.error { color:var(--red); }
 </style>
