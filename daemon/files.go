@@ -478,8 +478,15 @@ func handleFileUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Reject filenames with path traversal attempts in the raw input
+	rawFilename := header.Filename
+	if strings.Contains(rawFilename, "..") || strings.Contains(rawFilename, "/") || strings.Contains(rawFilename, "\\") {
+		jsonError(w, 400, "Invalid filename")
+		return
+	}
+
 	// Sanitize filename
-	fileName := sanitizeFileName(header.Filename)
+	fileName := sanitizeFileName(rawFilename)
 	if fileName == "" || len(fileName) > 255 {
 		jsonError(w, 400, "Invalid filename")
 		return

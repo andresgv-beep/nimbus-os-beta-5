@@ -163,6 +163,20 @@ func corsMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
+		// Block path traversal at the middleware level BEFORE mux normalizes
+		// Go's ServeMux normalizes /app/../ to / silently — we catch it here
+		rawPath := r.URL.RawPath
+		if rawPath == "" {
+			rawPath = r.URL.Path
+		}
+		requestURI := r.RequestURI
+		if strings.Contains(rawPath, "..") || strings.Contains(requestURI, "..") {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(400)
+			w.Write([]byte(`{"error":"Invalid path"}`))
+			return
+		}
+
 		// Security headers
 		w.Header().Set("X-Frame-Options", "SAMEORIGIN")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -221,9 +235,17 @@ func isLocalOrigin(origin string) bool {
 		return true
 	}
 
-	// .local mDNS domains — must END with .local (not contain it)
+	// .local mDNS domains — only single-label hostnames (e.g. "nimos.local")
+	// mDNS standard: hostname.local with NO extra dots/subdomains
+	// This blocks "attacker.local" style but allows legitimate "mynas.local"
 	if strings.HasSuffix(host, ".local") {
-		return true
+		// Must be exactly "something.local" — one label, no dots before .local
+		prefix := strings.TrimSuffix(host, ".local")
+		if prefix != "" && !strings.Contains(prefix, ".") {
+			// Valid single-label mDNS name
+			return true
+		}
+		return false
 	}
 
 	// LAN IPs — validate they are actual IPs, not subdomains
