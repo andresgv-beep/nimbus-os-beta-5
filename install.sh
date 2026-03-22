@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # ╔══════════════════════════════════════════════════════════════╗
-# ║  NimOS Beta 4 Installer                                  ║
-# ║  Transforms Ubuntu/Debian Server into a NimOS NAS        ║
-# ║  curl -fsSL https://raw.githubusercontent.com/              ║
-# ║    andresgv-beep/NimOs-beta-4/main/install.sh | sudo bash║
+# ║  NimOS Beta 5 Installer                                    ║
+# ║  Transforms Ubuntu/Debian Server into a NimOS NAS          ║
+# ║  curl -fsSL https://raw.githubusercontent.com/               ║
+# ║    andresgv-beep/NimOs-beta-5/main/install.sh | sudo bash  ║
 # ╚══════════════════════════════════════════════════════════════╝
 
 set -euo pipefail
 
 # ── Config ──
-NIMBUS_VERSION="4.0.0-beta"
+NIMBUS_VERSION="5.0.0-beta"
 NIMBUS_REPO="https://github.com/andresgv-beep/NimOs-beta-5"
 NIMBUS_BRANCH="main"
 INSTALL_DIR="/opt/nimbusos"
@@ -56,32 +56,36 @@ preflight() {
 
   # Check architecture
   ARCH=$(uname -m)
-  if [[ "$ARCH" != "x86_64" && "$ARCH" != "aarch64" ]]; then
-    err "Unsupported architecture: $ARCH (need x86_64 or aarch64)"
+  if [[ "$ARCH" != "x86_64" && "$ARCH" != "aarch64" && "$ARCH" != "armv7l" ]]; then
+    err "Unsupported architecture: $ARCH (need x86_64, aarch64, or armv7l)"
     exit 1
   fi
   ok "Architecture: $ARCH"
 
-  # Check memory (warn if < 1GB)
+  # Check memory
   MEM_KB=$(grep MemTotal /proc/meminfo | awk '{print $2}')
   MEM_MB=$((MEM_KB / 1024))
   MEM_GB=$((MEM_MB / 1024))
-  if [[ $MEM_MB -lt 1024 ]]; then
+  if [[ $MEM_MB -lt 512 ]]; then
     warn "Only ${MEM_MB}MB RAM detected. NimOS recommends at least 1GB."
   fi
-  ok "Memory: ${MEM_MB}MB"
+  ok "Memory: ${MEM_MB}MB (${MEM_GB}GB)"
 
   # Determine storage backend capability
-  # ZFS needs x86_64 + 8GB+ RAM. ARM / low-RAM → mdadm only
-  STORAGE_BACKEND="mdadm"
-  if [[ "$ARCH" == "x86_64" && $MEM_GB -ge 8 ]]; then
-    STORAGE_BACKEND="zfs+mdadm"
-  elif [[ "$ARCH" == "x86_64" && $MEM_GB -ge 4 ]]; then
-    # 4-8GB: offer ZFS but warn about ARC tuning
-    STORAGE_BACKEND="zfs+mdadm"
-    warn "4-8GB RAM: ZFS available but ARC will be limited. Recommended 8GB+."
+  # Btrfs: works everywhere (x86, ARM, any RAM)
+  # ZFS: needs x86_64 + 4GB+ RAM
+  INSTALL_ZFS=false
+  INSTALL_BTRFS=true  # Always install Btrfs
+
+  if [[ "$ARCH" == "x86_64" && $MEM_GB -ge 4 ]]; then
+    INSTALL_ZFS=true
+    ok "Storage: ZFS + Btrfs (x86_64, ${MEM_GB}GB RAM)"
+  elif [[ "$ARCH" == "x86_64" && $MEM_GB -ge 2 ]]; then
+    INSTALL_ZFS=true
+    warn "Storage: ZFS + Btrfs (low RAM — ZFS ARC will be limited)"
+  else
+    ok "Storage: Btrfs (${ARCH}, ${MEM_GB}GB RAM — ZFS not recommended)"
   fi
-  ok "Storage backend: $STORAGE_BACKEND"
 
   # Check disk space (need at least 2GB free)
   FREE_KB=$(df / | tail -1 | awk '{print $4}')
@@ -107,23 +111,37 @@ install_deps() {
   export DEBIAN_FRONTEND=noninteractive
   apt-get update -qq
 
-  # Critical packages (fail if these don't install)
+  # Core packages
   log "Installing core packages..."
   apt-get install -y -qq \
     curl wget git ca-certificates gnupg lsb-release \
     smartmontools hdparm lm-sensors \
-    mdadm gdisk \
+    gdisk parted \
     samba \
     vsftpd \
     nginx \
     certbot python3-certbot-nginx \
     ufw \
-    avahi-daemon
+    avahi-daemon \
+    acl
 
   ok "Core packages installed"
 
-  # ZFS — only on x86_64 with sufficient RAM
-  if [[ "$STORAGE_BACKEND" == "zfs+mdadm" ]]; then
+  # ── Btrfs — always install ──
+  log "Installing Btrfs..."
+  if apt-get install -y -qq btrfs-progs 2>/dev/null; then
+    if command -v mkfs.btrfs &>/dev/null; then
+      ok "Btrfs installed and available"
+    else
+      warn "btrfs-progs installed but mkfs.btrfs not found"
+    fi
+  else
+    warn "btrfs-progs not available — trying alternative..."
+    apt-get install -y -qq btrfs-tools 2>/dev/null || warn "Btrfs tools not available"
+  fi
+
+  # ── ZFS — only on x86_64 with sufficient RAM ──
+  if [[ "$INSTALL_ZFS" == true ]]; then
     log "Installing ZFS (x86_64 + ${MEM_GB}GB RAM detected)..."
     if apt-get install -y -qq zfsutils-linux 2>/dev/null; then
       # Load ZFS kernel module
@@ -137,21 +155,25 @@ install_deps() {
           ok "ZFS ARC max set to $((ARC_MAX / 1024 / 1024 / 1024))GB (50% of RAM)"
         fi
       else
-        warn "ZFS package installed but zpool not available — kernel module may need reboot"
-        STORAGE_BACKEND="mdadm"
+        warn "ZFS package installed but zpool not available — may need reboot"
       fi
     else
-      warn "ZFS not available for this system — using mdadm only"
-      STORAGE_BACKEND="mdadm"
+      warn "ZFS not available for this system"
+      INSTALL_ZFS=false
     fi
   else
-    log "Skipping ZFS (${ARCH}, ${MEM_GB}GB RAM — using mdadm for storage)"
+    log "Skipping ZFS (${ARCH}, ${MEM_GB}GB RAM)"
   fi
 
   # Save storage backend capability for the daemon
+  STORAGE_BACKEND="btrfs"
+  if [[ "$INSTALL_ZFS" == true ]] && command -v zpool &>/dev/null; then
+    STORAGE_BACKEND="zfs+btrfs"
+  fi
+
   mkdir -p "$DATA_DIR/config"
   echo "{\"storageBackend\":\"$STORAGE_BACKEND\",\"arch\":\"$ARCH\",\"ramGB\":$MEM_GB}" > "$DATA_DIR/config/system-caps.json"
-  ok "System capabilities saved"
+  ok "System capabilities saved (backend: $STORAGE_BACKEND)"
 
   # Optional packages (nice to have, don't fail)
   log "Installing optional packages..."
@@ -168,9 +190,8 @@ install_deps() {
   # Verify critical tools
   local missing=""
   command -v smbd &>/dev/null || missing="$missing samba"
-  command -v mdadm &>/dev/null || missing="$missing mdadm"
+  command -v mkfs.btrfs &>/dev/null || missing="$missing btrfs-progs"
   command -v smartctl &>/dev/null || missing="$missing smartmontools"
-  command -v vsftpd &>/dev/null || missing="$missing vsftpd"
 
   if [[ -n "$missing" ]]; then
     err "Failed to install critical packages:$missing"
@@ -181,7 +202,7 @@ install_deps() {
   ok "All critical packages verified"
 }
 
-# ── Install Docker ──
+# ── Docker ──
 install_docker() {
   step "Docker"
   ok "Docker available in App Store — install after creating a storage pool"
@@ -200,7 +221,6 @@ setup_user() {
   fi
 
   # Add to required groups
-  usermod -aG docker $NIMBUS_USER 2>/dev/null || true
   usermod -aG sudo $NIMBUS_USER 2>/dev/null || true
 
   # Create directories
@@ -241,12 +261,10 @@ install_nimos() {
   if command -v g++ &>/dev/null && dpkg -l libtorrent-rasterbar-dev &>/dev/null 2>&1; then
     log "Building NimTorrent daemon..."
     
-    # Stop daemon before overwriting binary
     systemctl stop nimos-torrentd 2>/dev/null || true
     
     cd "$INSTALL_DIR/torrentd"
 
-    # Download httplib.h if not present
     if [[ ! -f httplib.h ]]; then
       curl -fsSLO https://raw.githubusercontent.com/yhirose/cpp-httplib/master/httplib.h 2>/dev/null || true
     fi
@@ -257,18 +275,14 @@ install_nimos() {
         chmod 755 /usr/local/bin/nimos-torrentd
         mkdir -p /var/lib/nimos/torrentd/state /run/nimos /data/torrents
 
-        # Default config
         if [[ ! -f /etc/nimos/torrent.conf ]]; then
           mkdir -p /etc/nimos
           cp torrent.conf /etc/nimos/torrent.conf
         fi
 
-        # Systemd service
         cp nimos-torrentd.service /etc/systemd/system/
         systemctl daemon-reload
         systemctl enable nimos-torrentd 2>/dev/null || true
-
-        # Set ownership
         chown -R $NIMBUS_USER:$NIMBUS_USER /var/lib/nimos /data/torrents 2>/dev/null || true
 
         ok "NimTorrent daemon built and installed"
@@ -283,7 +297,7 @@ install_nimos() {
     warn "libtorrent not available — NimTorrent disabled"
   fi
 
-  # Migrate from old homedir-based config (Beta 1 → Beta 2)
+  # Migrate from old homedir-based config
   for OLD_DIR in /root/.nimbusos /home/*/.nimbusos; do
     if [ -d "$OLD_DIR/config" ] && [ ! -f "$DATA_DIR/config/users.json" ]; then
       log "Migrating config from $OLD_DIR to $DATA_DIR..."
@@ -348,11 +362,10 @@ EOF
 
   systemctl daemon-reload
 
-  # ── Build and install nimos-daemon (Go binary — the main server) ──
+  # ── Build and install nimos-daemon (Go binary) ──
   if [ -d "$INSTALL_DIR/daemon" ] && [ -f "$INSTALL_DIR/daemon/main.go" ]; then
     log "Building nimos-daemon (Go)..."
     
-    # Install Go if not present
     if ! command -v go &>/dev/null; then
       log "Installing Go compiler..."
       apt-get install -y -qq golang-go 2>/dev/null || warn "Failed to install Go — daemon will not be built"
@@ -396,7 +409,6 @@ EOF
 setup_firewall() {
   step "Configuring firewall (ufw)"
 
-  # Don't lock ourselves out
   ufw default deny incoming 2>/dev/null || true
   ufw default allow outgoing 2>/dev/null || true
 
@@ -412,17 +424,15 @@ setup_firewall() {
   ufw allow 6881:6889/tcp comment 'Torrent' 2>/dev/null || true
   ufw allow 6881:6889/udp comment 'Torrent DHT' 2>/dev/null || true
 
-  # Enable firewall (non-interactive)
   echo "y" | ufw enable 2>/dev/null || true
 
-  ok "Firewall configured (SSH, NimOS:$NIMBUS_PORT$NIMBUS_PORT, SMB, mDNS)"
+  ok "Firewall configured"
 }
 
-# ── Configure Samba (basic) ──
+# ── Configure Samba ──
 setup_samba() {
   step "Configuring Samba"
 
-  # Backup original config
   [[ -f /etc/samba/smb.conf ]] && cp /etc/samba/smb.conf /etc/samba/smb.conf.bak
 
   cat > /etc/samba/smb.conf << 'EOF'
@@ -434,7 +444,6 @@ setup_samba() {
    max log size = 1000
    logging = file
    panic action = /usr/share/samba/panic-action %d
-   server role = standalone server
    obey pam restrictions = yes
    unix password sync = yes
    map to guest = bad user
@@ -442,18 +451,16 @@ setup_samba() {
    min protocol = SMB2
    max protocol = SMB3
 
-# Shares are managed by NimOS
-# Add custom shares via the NimOS web interface
+# Shares are managed by NimOS web interface
 EOF
 
-  # Don't auto-start services — user enables them from NimOS UI
   systemctl disable smbd nmbd 2>/dev/null || true
   systemctl stop smbd nmbd 2>/dev/null || true
 
   ok "Samba configured"
 }
 
-# ── Configure vsftpd (FTP) ──
+# ── Configure vsftpd ──
 setup_ftp() {
   step "Configuring FTP (vsftpd)"
 
@@ -489,69 +496,45 @@ EOF
   ok "FTP configured (port 21, passive 55000-55999)"
 }
 
-# ── Configure Apache WebDAV ──
-
-# ── Configure Nginx (Reverse Proxy) ──
+# ── Configure Nginx ──
 setup_nginx() {
   step "Configuring Nginx (Reverse Proxy)"
 
-  # Ensure apache doesn't conflict with nginx (may come as dependency)
   systemctl stop apache2 2>/dev/null || true
   systemctl disable apache2 2>/dev/null || true
 
-  # Remove default site
-  rm -f /etc/nginx/sites-enabled/default 2>/dev/null
-
-  # Create NimOS proxy base config
-  cat > /etc/nginx/sites-available/nimbusos-proxy.conf << 'EOF'
-# NimOS Reverse Proxy — managed by NimOS
-# Individual proxy rules are in /etc/nginx/sites-available/nimbusos-proxy-*.conf
-
-# Default server — shows NimOS if no proxy rule matches
+  cat > /etc/nginx/sites-available/nimbusos << EOF
 server {
     listen 80 default_server;
-    listen [::]:80 default_server;
     server_name _;
-
-    # Redirect to NimOS
     location / {
-        proxy_pass http://127.0.0.1:5000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_pass http://127.0.0.1:$NIMBUS_PORT;
         proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_read_timeout 120s;
+        proxy_send_timeout 120s;
+        client_max_body_size 500M;
     }
 }
 EOF
 
-  ln -sf /etc/nginx/sites-available/nimbusos-proxy.conf /etc/nginx/sites-enabled/ 2>/dev/null
+  ln -sf /etc/nginx/sites-available/nimbusos /etc/nginx/sites-enabled/nimbusos
+  rm -f /etc/nginx/sites-enabled/default
+  nginx -t 2>/dev/null && systemctl restart nginx
+  systemctl enable nginx
 
-  # Increase max upload size
-  echo 'client_max_body_size 10G;' > /etc/nginx/conf.d/nimbusos.conf
-
-  # Test and start
-  # Remove any stale HTTPS config from previous install (causes nginx -t to fail)
-  rm -f /etc/nginx/sites-enabled/nimbusos-https.conf 2>/dev/null
-  
-  # Enable and start nginx (required for NimOS reverse proxy and HTTPS)
-  systemctl enable nginx 2>/dev/null || true
-  nginx -t 2>/dev/null && systemctl restart nginx || {
-    # If nginx fails, remove all custom configs and retry
-    rm -f /etc/nginx/sites-enabled/nimbusos-* 2>/dev/null
-    nginx -t 2>/dev/null && systemctl restart nginx
-  }
-  
-  ok "Nginx configured (port 80 → NimOS, ready for proxy rules)"
+  ok "Nginx configured as reverse proxy"
 }
 
-# ── Configure Avahi (mDNS/Bonjour) ──
+# ── Configure Avahi ──
 setup_avahi() {
-  step "Configuring Avahi (network discovery)"
+  step "Configuring mDNS (Avahi)"
 
   HOSTNAME=$(hostname)
+
   cat > /etc/avahi/services/nimbusos.service << EOF
 <?xml version="1.0" standalone='no'?>
 <!DOCTYPE service-group SYSTEM "avahi-service.dtd">
@@ -560,8 +543,6 @@ setup_avahi() {
   <service>
     <type>_http._tcp</type>
     <port>$NIMBUS_PORT</port>
-    <txt-record>path=/</txt-record>
-    <txt-record>product=NimOS</txt-record>
   </service>
   <service>
     <type>_smb._tcp</type>
@@ -570,31 +551,36 @@ setup_avahi() {
 </service-group>
 EOF
 
-  systemctl enable avahi-daemon 2>/dev/null || true
   systemctl restart avahi-daemon 2>/dev/null || true
-
-  ok "Avahi configured — accessible as ${HOSTNAME}.local"
+  ok "mDNS: ${HOSTNAME}.local"
 }
 
 # ── Start NimOS ──
 start_nimbusos() {
   step "Starting NimOS"
 
-  # Start the Go daemon (serves API + frontend on :5000)
-  if systemctl is-enabled nimos-daemon &>/dev/null; then
-    systemctl start nimos-daemon
-    sleep 2
-    systemctl is-active --quiet nimos-daemon && ok "nimos-daemon running" || warn "nimos-daemon failed to start"
+  # Build frontend
+  if [ -f "$INSTALL_DIR/package.json" ]; then
+    cd "$INSTALL_DIR"
+    if command -v node &>/dev/null; then
+      npm install --production 2>/dev/null || true
+      npm run build 2>/dev/null || warn "Frontend build skipped"
+    else
+      log "Installing Node.js..."
+      apt-get install -y -qq nodejs npm 2>/dev/null || true
+      if command -v node &>/dev/null; then
+        npm install --production 2>/dev/null || true
+        npm run build 2>/dev/null || warn "Frontend build skipped"
+      fi
+    fi
   fi
 
-  # Start torrent daemon if installed
-  if [[ -f /usr/local/bin/nimos-torrentd ]]; then
-    systemctl start nimos-torrentd 2>/dev/null || true
-  fi
+  systemctl start nimos-daemon 2>/dev/null || true
+  systemctl start nimos-torrentd 2>/dev/null || true
 
-  # Wait for it to come up
+  # Wait for daemon to start
   for i in $(seq 1 15); do
-    if curl -sf "http://localhost:$NIMBUS_PORT/api/auth/status" &>/dev/null; then
+    if curl -s -o /dev/null -w "%{http_code}" "http://localhost:$NIMBUS_PORT" 2>/dev/null | grep -q "200\|301"; then
       ok "NimOS is running!"
       return
     fi
@@ -606,9 +592,14 @@ start_nimbusos() {
 
 # ── Print summary ──
 print_summary() {
-  # Get IP addresses
   LOCAL_IPS=$(hostname -I | tr ' ' '\n' | grep -E '^(192|10|172)' | head -3)
   HOSTNAME=$(hostname)
+
+  # Detect what storage backends are available
+  HAS_BTRFS="no"
+  HAS_ZFS="no"
+  command -v mkfs.btrfs &>/dev/null && HAS_BTRFS="yes"
+  command -v zpool &>/dev/null && HAS_ZFS="yes"
 
   echo ""
   echo -e "${GREEN}${BOLD}"
@@ -624,15 +615,12 @@ print_summary() {
   done
   echo -e "    ${CYAN}→ http://${HOSTNAME}.local:${NIMBUS_PORT}${NC}  (mDNS)"
   echo ""
-  echo -e "  ${BOLD}Manage:${NC}"
-  echo -e "    Status:   ${CYAN}systemctl status nimos-daemon${NC}"
-  echo -e "    Logs:     ${CYAN}journalctl -u nimos-daemon -f${NC}"
-  echo -e "    Restart:  ${CYAN}systemctl restart nimos-daemon${NC}"
-  echo -e "    Update:   ${CYAN}/opt/nimbusos/scripts/update.sh${NC}"
-  echo -e "    Uninstall:${CYAN} /opt/nimbusos/scripts/uninstall.sh${NC}"
+  echo -e "  ${BOLD}Storage:${NC}"
+  echo -e "    Btrfs:   ${HAS_BTRFS}"
+  echo -e "    ZFS:     ${HAS_ZFS}"
+  echo -e "    Docker:  Available in App Store (installs on pool)"
   echo ""
-  echo -e "  ${BOLD}Installed services:${NC}"
-  echo -e "    Docker:  $(docker --version 2>/dev/null | cut -d' ' -f3 | tr -d ',' || echo 'not found')"
+  echo -e "  ${BOLD}Services:${NC}"
   echo -e "    Go:      $(go version 2>/dev/null | cut -d' ' -f3 || echo 'not found')"
   echo -e "    Samba:   $(smbd --version 2>/dev/null || echo 'not found')"
   echo -e "    FTP:     $(vsftpd -v 2>&1 | head -1 2>/dev/null || echo 'not found')"
@@ -657,7 +645,7 @@ print_summary() {
 main() {
   echo -e "${CYAN}${BOLD}"
   echo "   ☁️  NimOS Installer v${NIMBUS_VERSION}"
-  echo "   Transforming Ubuntu Server into your personal NAS"
+  echo "   Transforming Ubuntu/Debian Server into your personal NAS"
   echo -e "${NC}"
 
   preflight
