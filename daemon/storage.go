@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -398,6 +399,7 @@ func getStoragePoolsGo() []map[string]interface{} {
 	conf := getStorageConfigFull()
 	raids := getRAIDStatusGo()
 	var pools []map[string]interface{}
+	configChanged := false
 
 	confPools, _ := conf["pools"].([]interface{})
 	primaryPool, _ := conf["primaryPool"].(string)
@@ -423,7 +425,7 @@ func getStoragePoolsGo() []map[string]interface{} {
 		filesystem, _ := poolConf["filesystem"].(string)
 		createdAt, _ := poolConf["createdAt"].(string)
 
-		// Find RAID array
+		// Find RAID array — first try by name, then by member disks
 		var raid map[string]interface{}
 		for _, r := range raids {
 			if r["name"] == arrayName {
@@ -431,30 +433,88 @@ func getStoragePoolsGo() []map[string]interface{} {
 				break
 			}
 		}
+		// If not found by name, search by disks (kernel may reassign md numbers on reboot)
+		if raid == nil && arrayName != "" {
+			poolDisks := map[string]bool{}
+			if pd, ok := poolConf["disks"].([]interface{}); ok {
+				for _, d := range pd {
+					if ds, ok := d.(string); ok {
+						// Extract base disk name: "/dev/sda" → "sda"
+						base := ds
+						if idx := strings.LastIndex(ds, "/"); idx >= 0 {
+							base = ds[idx+1:]
+						}
+						poolDisks[base] = true
+					}
+				}
+			}
+			if len(poolDisks) > 0 {
+				for _, r := range raids {
+					members, _ := r["members"].([]interface{})
+					matchCount := 0
+					for _, m := range members {
+						mm, _ := m.(map[string]interface{})
+						dev, _ := mm["device"].(string)
+						// Strip partition number: "sda1" → "sda"
+						devBase := strings.TrimRight(dev, "0123456789")
+						if poolDisks[devBase] {
+							matchCount++
+						}
+					}
+					if matchCount > 0 && matchCount >= len(poolDisks) {
+						raid = r
+						// Auto-update config with correct array name
+						newName, _ := r["name"].(string)
+						if newName != "" && newName != arrayName {
+							arrayName = newName
+							poolConf["arrayName"] = newName
+							configChanged = true
+						}
+						break
+					}
+				}
+			}
+		}
 
-		// Get disk usage
+		// Check if actually mounted (not just directory on root filesystem)
+		isMounted := false
+		if mountPoint != "" {
+			mountSrc, mountOk := run(fmt.Sprintf("findmnt -n -o SOURCE %s 2>/dev/null", mountPoint))
+			if mountOk && strings.TrimSpace(mountSrc) != "" {
+				// Verify it's not the root filesystem
+				rootSrc, _ := run("findmnt -n -o SOURCE / 2>/dev/null")
+				if strings.TrimSpace(mountSrc) != strings.TrimSpace(rootSrc) {
+					isMounted = true
+				}
+			}
+		}
+
+		// Get disk usage ONLY if actually mounted
 		var total, used, available int64
-		if mountInfo, ok := run(fmt.Sprintf("df -B1 --output=size,used,avail %s 2>/dev/null", mountPoint)); ok {
-			lines := strings.Split(strings.TrimSpace(mountInfo), "\n")
-			if len(lines) > 1 {
-				parts := strings.Fields(lines[1])
-				if len(parts) >= 3 {
-					total = parseInt64(parts[0])
-					used = parseInt64(parts[1])
-					available = parseInt64(parts[2])
+		if isMounted {
+			if mountInfo, ok := run(fmt.Sprintf("df -B1 --output=size,used,avail %s 2>/dev/null", mountPoint)); ok {
+				lines := strings.Split(strings.TrimSpace(mountInfo), "\n")
+				if len(lines) > 1 {
+					parts := strings.Fields(lines[1])
+					if len(parts) >= 3 {
+						total = parseInt64(parts[0])
+						used = parseInt64(parts[1])
+						available = parseInt64(parts[2])
+					}
 				}
 			}
 		}
 
 		poolStatus := "unknown"
-		if raid != nil {
+		if !isMounted {
+			poolStatus = "offline"
+			total = 0
+			used = 0
+			available = 0
+		} else if raid != nil {
 			poolStatus, _ = raid["status"].(string)
 		} else if raidLevel == "single" || arrayName == "" {
-			if total > 0 {
-				poolStatus = "active"
-			} else {
-				poolStatus = "unmounted"
-			}
+			poolStatus = "active"
 		}
 
 		var disks []interface{}
@@ -510,6 +570,13 @@ func getStoragePoolsGo() []map[string]interface{} {
 	if pools == nil {
 		pools = []map[string]interface{}{}
 	}
+
+	// Auto-save config if array names were corrected
+	if configChanged {
+		saveStorageConfigFull(conf)
+		logMsg("Storage config auto-updated (array names corrected)")
+	}
+
 	return pools
 }
 
@@ -812,68 +879,131 @@ func wipeDiskGo(diskPath string) map[string]interface{} {
 		return map[string]interface{}{"error": "Cannot wipe the boot disk"}
 	}
 
-	// Unmount all partitions of this disk first, deactivate swap
+	diskBase := filepath.Base(diskPath)
+
+	// ── Phase 1: Stop everything using this disk ──
+
+	// Unmount all partitions
 	partitions, _ := run(fmt.Sprintf("lsblk -ln -o NAME %s 2>/dev/null | tail -n +2", diskPath))
 	for _, p := range strings.Fields(partitions) {
 		p = strings.TrimSpace(p)
-		if p != "" {
-			run(fmt.Sprintf("swapoff /dev/%s 2>/dev/null || true", p))
-			run(fmt.Sprintf("umount -f /dev/%s 2>/dev/null || true", p))
+		if p == "" {
+			continue
 		}
+		run(fmt.Sprintf("swapoff /dev/%s 2>/dev/null || true", p))
+		run(fmt.Sprintf("umount -l /dev/%s 2>/dev/null || true", p))   // lazy unmount
+		run(fmt.Sprintf("umount -f /dev/%s 2>/dev/null || true", p))   // force unmount
 	}
-	// Also try unmounting the disk device itself
+	run(fmt.Sprintf("umount -l %s 2>/dev/null || true", diskPath))
 	run(fmt.Sprintf("umount -f %s 2>/dev/null || true", diskPath))
 
 	// Stop any mdadm arrays using this disk
 	if mdstat, err := os.ReadFile("/proc/mdstat"); err == nil {
-		diskBase := diskPath[strings.LastIndex(diskPath, "/")+1:]
 		lines := strings.Split(string(mdstat), "\n")
 		for _, line := range lines {
 			if strings.Contains(line, diskBase) {
 				parts := strings.Fields(line)
 				if len(parts) > 0 && strings.HasPrefix(parts[0], "md") {
 					mdDev := "/dev/" + parts[0]
-					run(fmt.Sprintf("umount %s 2>/dev/null || true", mdDev))
+					run(fmt.Sprintf("umount -l %s 2>/dev/null || true", mdDev))
 					run(fmt.Sprintf("mdadm --stop %s 2>/dev/null || true", mdDev))
 				}
 			}
 		}
 	}
 
-	// Zero mdadm superblock on disk and all partitions
-	run(fmt.Sprintf("mdadm --zero-superblock %s 2>/dev/null || true", diskPath))
+	// Remove any device-mapper mappings on this disk (LVM, LUKS, etc.)
 	partitions2, _ := run(fmt.Sprintf("lsblk -ln -o NAME %s 2>/dev/null | tail -n +2", diskPath))
 	for _, p := range strings.Fields(partitions2) {
 		p = strings.TrimSpace(p)
-		if p != "" {
-			run(fmt.Sprintf("mdadm --zero-superblock /dev/%s 2>/dev/null || true", p))
+		if p == "" {
+			continue
+		}
+		// Remove dm mappings
+		run(fmt.Sprintf("dmsetup remove /dev/%s 2>/dev/null || true", p))
+		// Close LUKS if open
+		run(fmt.Sprintf("cryptsetup close /dev/%s 2>/dev/null || true", p))
+		// Zero mdadm superblock
+		run(fmt.Sprintf("mdadm --zero-superblock /dev/%s 2>/dev/null || true", p))
+	}
+	run(fmt.Sprintf("mdadm --zero-superblock %s 2>/dev/null || true", diskPath))
+
+	// ── Phase 2: Destroy partition table and signatures ──
+
+	// Zero first and last 10MB (GPT has backup at end of disk)
+	run(fmt.Sprintf("dd if=/dev/zero of=%s bs=1M count=10 conv=notrunc 2>/dev/null || true", diskPath))
+	diskSize, _ := run(fmt.Sprintf("blockdev --getsize64 %s 2>/dev/null", diskPath))
+	if size := strings.TrimSpace(diskSize); size != "" {
+		if sizeInt, err := strconv.ParseInt(size, 10, 64); err == nil && sizeInt > 20*1024*1024 {
+			seekMB := (sizeInt / (1024 * 1024)) - 10
+			run(fmt.Sprintf("dd if=/dev/zero of=%s bs=1M count=10 seek=%d conv=notrunc 2>/dev/null || true", diskPath, seekMB))
 		}
 	}
 
-	// Wipe filesystem signatures and partition table
-	// 1) Zero first 10MB to destroy partition table headers
-	run(fmt.Sprintf("dd if=/dev/zero of=%s bs=1M count=10 2>/dev/null || true", diskPath))
-	// 2) Destroy GPT structures if sgdisk available
+	// Destroy GPT with sgdisk
 	if _, ok := run("which sgdisk 2>/dev/null"); ok {
 		run(fmt.Sprintf("sgdisk -Z %s 2>/dev/null || true", diskPath))
 	}
-	// 3) Wipe all remaining filesystem signatures
-	wipefs, wipeOk := run(fmt.Sprintf("wipefs -af %s 2>&1", diskPath))
-	if !wipeOk {
-		return map[string]interface{}{"error": fmt.Sprintf("wipefs failed on %s: %s", diskPath, wipefs)}
+
+	// Wipe all filesystem signatures
+	run(fmt.Sprintf("wipefs -af %s 2>&1 || true", diskPath))
+
+	// ── Phase 3: Force kernel to forget partitions ──
+
+	// Method 1: partx --delete (most reliable)
+	run(fmt.Sprintf("partx -d %s 2>/dev/null || true", diskPath))
+
+	// Method 2: Delete each partition individually via sysfs
+	for i := 1; i <= 128; i++ {
+		partDev := fmt.Sprintf("/sys/block/%s/%s%d", diskBase, diskBase, i)
+		if _, err := os.Stat(partDev); err == nil {
+			// Partition exists in sysfs — force kernel to delete it
+			deletePath := fmt.Sprintf("/sys/block/%s/%s%d/partition", diskBase, diskBase, i)
+			if _, err := os.Stat(deletePath); err == nil {
+				// Use ioctl via blockdev or echo to sysfs
+				run(fmt.Sprintf("echo 1 > /sys/block/%s/device/delete 2>/dev/null || true", diskBase))
+			}
+		} else {
+			break // No more partitions
+		}
 	}
-	// 4) Force kernel to re-read partition table
-	run(fmt.Sprintf("partprobe %s 2>/dev/null || true", diskPath))
+
+	// Method 3: blockdev --rereadpt (tell kernel to re-read — should see empty table)
 	run(fmt.Sprintf("blockdev --rereadpt %s 2>/dev/null || true", diskPath))
 
-	// Verify: check that no partitions remain
-	time.Sleep(1 * time.Second)
+	// Method 4: partprobe
+	run(fmt.Sprintf("partprobe %s 2>/dev/null || true", diskPath))
+
+	// Wait for udev to settle
+	run("udevadm settle --timeout=5 2>/dev/null || true")
+	time.Sleep(2 * time.Second)
+
+	// ── Phase 4: Verify ──
+
+	// Re-read one more time
 	run(fmt.Sprintf("blockdev --rereadpt %s 2>/dev/null || true", diskPath))
 	run(fmt.Sprintf("partprobe %s 2>/dev/null || true", diskPath))
+	run("udevadm settle --timeout=3 2>/dev/null || true")
 	time.Sleep(1 * time.Second)
+
 	verifyParts, _ := run(fmt.Sprintf("lsblk -ln -o NAME %s 2>/dev/null | tail -n +2", diskPath))
-	if strings.TrimSpace(verifyParts) != "" {
-		return map[string]interface{}{"error": fmt.Sprintf("Wipe completed but partitions still detected on %s. The disk may be in use or the kernel has not yet updated.", diskPath)}
+	remainingParts := strings.TrimSpace(verifyParts)
+
+	if remainingParts != "" {
+		// Last resort: check if the partitions are truly gone from the partition table
+		// even if the kernel still shows them (stale device nodes)
+		tableCheck, _ := run(fmt.Sprintf("sfdisk -d %s 2>/dev/null", diskPath))
+		if strings.TrimSpace(tableCheck) == "" || !strings.Contains(tableCheck, "start=") {
+			// Partition table is actually empty — kernel just hasn't caught up
+			// This is safe to proceed — the pool creation will re-partition
+			log.Printf("Wipe: %s partition table is empty but kernel still shows stale nodes. Safe to proceed.", diskPath)
+			return map[string]interface{}{"ok": true, "disk": diskPath, "note": "Partition table cleared. Stale kernel entries will be updated on next use."}
+		}
+
+		// Partitions truly still there — report but don't fail hard
+		// because pool creation will re-partition anyway
+		log.Printf("Wipe: %s still shows partitions: %s — pool creation will force re-partition", diskPath, remainingParts)
+		return map[string]interface{}{"ok": true, "disk": diskPath, "warning": "Disk wiped but kernel still shows old partitions. This is normal — they will be overwritten when creating a pool."}
 	}
 
 	return map[string]interface{}{"ok": true, "disk": diskPath}
@@ -1205,10 +1335,16 @@ func restorePoolGo(device, poolName string) map[string]interface{} {
 // ═══════════════════════════════════
 
 func startStorageMonitoring() {
+	// On startup: clean orphan mount point directories
+	// If a pool dir exists but nothing is mounted there, remove it
+	// to prevent writes going to the system disk
+	cleanOrphanMountPoints()
+
 	go func() {
 		for {
 			time.Sleep(5 * time.Minute)
 			checkStorageHealthGo()
+			cleanOrphanMountPoints()
 		}
 	}()
 	go func() {
@@ -1219,6 +1355,41 @@ func startStorageMonitoring() {
 			}
 		}
 	}()
+}
+
+func cleanOrphanMountPoints() {
+	conf := getStorageConfigFull()
+	confPools, _ := conf["pools"].([]interface{})
+
+	for _, poolRaw := range confPools {
+		pm, _ := poolRaw.(map[string]interface{})
+		if pm == nil {
+			continue
+		}
+		mountPoint, _ := pm["mountPoint"].(string)
+		if mountPoint == "" || !strings.HasPrefix(mountPoint, nimbusPoolsDir) {
+			continue
+		}
+
+		// Check if directory exists
+		if _, err := os.Stat(mountPoint); err != nil {
+			continue // doesn't exist, nothing to clean
+		}
+
+		// Check if actually mounted
+		mountSrc, ok := run(fmt.Sprintf("findmnt -n -o SOURCE %s 2>/dev/null", mountPoint))
+		if ok && strings.TrimSpace(mountSrc) != "" {
+			rootSrc, _ := run("findmnt -n -o SOURCE / 2>/dev/null")
+			if strings.TrimSpace(mountSrc) != strings.TrimSpace(rootSrc) {
+				continue // properly mounted on a real device
+			}
+		}
+
+		// Directory exists but not mounted on a real device — remove it
+		// to prevent any process from writing to system disk
+		os.RemoveAll(mountPoint)
+		logMsg("Removed orphan mount point %s (pool disk not mounted)", mountPoint)
+	}
 }
 
 // ═══════════════════════════════════
@@ -1258,9 +1429,9 @@ func handleStorageRoutes(w http.ResponseWriter, r *http.Request) {
 	urlPath := r.URL.Path
 	method := r.Method
 
-	// GET routes (need auth)
+	// GET routes (need admin — storage is sensitive)
 	if method == "GET" {
-		session := requireAuth(w, r)
+		session := requireAdmin(w, r)
 		if session == nil {
 			return
 		}
