@@ -146,6 +146,10 @@
       {#await import('$lib/apps/MediaPlayer.svelte') then module}
         <svelte:component this={module.default} />
       {/await}
+    {:else if win.appId === 'texteditor'}
+      {#await import('$lib/apps/Notes.svelte') then module}
+        <svelte:component this={module.default} />
+      {/await}
     {:else}
       <div class="placeholder">
         <span style="font-size:48px">{meta.icon}</span>
