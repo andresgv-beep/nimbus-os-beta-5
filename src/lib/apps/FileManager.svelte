@@ -129,16 +129,16 @@
 
   function calcMenuPos(e, menuW = 200, menuH = 290) {
     const z = getZoom();
-    const x = e.clientX / z;
-    const y = e.clientY / z;
-    // Usar el contenedor raíz de la app para calcular límites
     const root = document.querySelector('.files-root');
-    const rect = root ? root.getBoundingClientRect() : null;
-    const maxX = rect ? (rect.right / z) - 8 : (window.innerWidth / z) - 8;
-    const maxY = rect ? (rect.bottom / z) - 8 : (window.innerHeight / z) - 8;
+    const rect = root ? root.getBoundingClientRect() : { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
+    // Coordinates relative to the container (since ctx-menu is position:absolute inside files-root)
+    const x = (e.clientX - rect.left) / z;
+    const y = (e.clientY - rect.top) / z;
+    const maxX = rect.width / z - menuW - 8;
+    const maxY = rect.height / z - menuH - 8;
     return {
-      x: x + menuW > maxX ? x - menuW : x,
-      y: y + menuH > maxY ? y - menuH : y,
+      x: Math.max(0, Math.min(x, maxX)),
+      y: Math.max(0, Math.min(y, maxY)),
     };
   }
 
@@ -382,13 +382,12 @@
       </div>
     </div>
   </div>
-</div>
 
-<!-- ══ CONTEXT MENU ══ -->
-{#if ctxMenu}
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="ctx-menu" style="left:{ctxMenu.x}px;top:{ctxMenu.y}px"
-    on:contextmenu|preventDefault>
+  <!-- ══ CONTEXT MENU ══ -->
+  {#if ctxMenu}
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div class="ctx-menu" style="left:{ctxMenu.x}px;top:{ctxMenu.y}px"
+      on:contextmenu|preventDefault>
 
     {#if ctxMenu.file}
       <!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -517,6 +516,7 @@
     </div>
   </div>
 {/if}
+</div>
 
 <style>
   .files-root { width:100%; height:100%; display:flex; overflow:hidden; position:relative; background:var(--bg-frame); font-family:'Inter',-apple-system,sans-serif; color:var(--text-1); }
