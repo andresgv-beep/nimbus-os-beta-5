@@ -11,8 +11,11 @@
   let nvme = [];
   let selectedDisk = null;
 
+  // Storage capabilities
+  let capabilities = { zfs: false, btrfs: false, mdadm: false, recommended: 'btrfs' };
+
   // Create pool state
-  let newPool = { name: '', level: '1', filesystem: 'ext4', disks: [] };
+  let newPool = { name: '', type: 'btrfs', profile: 'single', disks: [] };
   let creating = false;
   let poolMsg = '';
   let poolMsgError = false;
@@ -34,16 +37,21 @@
   async function load() {
     loading = true;
     try {
-      const [statusRes, disksRes] = await Promise.all([
+      const [statusRes, disksRes, capRes] = await Promise.all([
         fetch('/api/storage/status', { headers: hdrs() }),
         fetch('/api/storage/disks',  { headers: hdrs() }),
+        fetch('/api/storage/capabilities', { headers: hdrs() }),
       ]);
       const status = await statusRes.json();
       const disks  = await disksRes.json();
+      const caps   = await capRes.json();
       pools       = status.pools       || [];
       eligible    = disks.eligible     || [];
       provisioned = disks.provisioned  || [];
       nvme        = disks.nvme         || [];
+      capabilities = caps;
+      // Set default pool type from recommended
+      if (caps.recommended) newPool.type = caps.recommended;
     } catch (e) {
       console.error('[Storage] load failed', e);
     }
@@ -80,15 +88,30 @@
     if (newPool.disks.length === 0) { poolMsg = 'Selecciona al menos un disco'; poolMsgError = true; return; }
     creating = true; poolMsg = '';
     try {
+      const body = {
+        name: newPool.name.trim(),
+        type: newPool.type,
+        disks: newPool.disks,
+      };
+      // Add type-specific params
+      if (newPool.type === 'btrfs') {
+        body.profile = newPool.profile;
+      } else if (newPool.type === 'zfs') {
+        body.vdevType = newPool.profile;
+      } else {
+        body.level = newPool.profile;
+        body.filesystem = 'ext4';
+      }
       const res = await fetch('/api/storage/pool', {
         method: 'POST',
         headers: { ...hdrs(), 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: newPool.name.trim(), level: newPool.level, filesystem: newPool.filesystem, disks: newPool.disks }),
+        body: JSON.stringify(body),
       });
       const data = await res.json();
       if (data.ok) {
         poolMsg = `Pool "${newPool.name}" creado correctamente`; poolMsgError = false;
-        newPool = { name: '', level: '1', filesystem: 'ext4', disks: [] };
+        newPool = { name: '', type: capabilities.recommended || 'btrfs', profile: 'single', disks: [] };
+        showCreatePool = false;
         load();
       } else {
         poolMsg = data.error || 'Error al crear pool'; poolMsgError = true;
@@ -319,7 +342,7 @@
                 {pool.name}
                 {#if pool.isPrimary}<span class="pool-primary">(principal)</span>{/if}
               </div>
-              <div class="pool-meta">{pool.raidLevel || 'single'} · {pool.mountPoint || '—'} · {pool.totalFormatted || fmt(pool.total)}</div>
+              <div class="pool-meta">{pool.type || pool.filesystem || 'ext4'} · {pool.raidLevel || pool.profile || 'single'} · {pool.mountPoint || '—'} · {pool.totalFormatted || fmt(pool.total)}</div>
             </div>
             <div class="pool-badge" class:green={pool.status === 'active'}>{pool.status || '—'}</div>
             <!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -386,21 +409,40 @@
 
             <div class="form-row">
               <div class="form-field" style="flex:1">
-                <label class="form-label">RAID</label>
-                <select class="form-select" bind:value={newPool.level}>
-                  <option value="single">Single</option>
-                  <option value="0">RAID 0</option>
-                  <option value="1">RAID 1</option>
-                  <option value="5">RAID 5</option>
-                  <option value="6">RAID 6</option>
-                  <option value="10">RAID 10</option>
+                <label class="form-label">Filesystem</label>
+                <select class="form-select" bind:value={newPool.type}>
+                  {#if capabilities.btrfs}
+                    <option value="btrfs">Btrfs {capabilities.recommended === 'btrfs' ? '(recomendado)' : ''}</option>
+                  {/if}
+                  {#if capabilities.zfs}
+                    <option value="zfs">ZFS {capabilities.recommended === 'zfs' ? '(recomendado)' : ''}</option>
+                  {/if}
+                  {#if capabilities.mdadm}
+                    <option value="mdadm">ext4 (legacy)</option>
+                  {/if}
                 </select>
               </div>
               <div class="form-field" style="flex:1">
-                <label class="form-label">Filesystem</label>
-                <select class="form-select" bind:value={newPool.filesystem}>
-                  <option value="ext4">ext4</option>
-                  <option value="xfs">XFS</option>
+                <label class="form-label">Protección</label>
+                <select class="form-select" bind:value={newPool.profile}>
+                  {#if newPool.type === 'btrfs'}
+                    <option value="single">Single</option>
+                    <option value="raid1">RAID 1 (mirror)</option>
+                    <option value="raid0">RAID 0 (stripe)</option>
+                    <option value="raid10">RAID 10</option>
+                  {:else if newPool.type === 'zfs'}
+                    <option value="stripe">Single / Stripe</option>
+                    <option value="mirror">Mirror (RAID 1)</option>
+                    <option value="raidz1">RAIDZ1 (RAID 5)</option>
+                    <option value="raidz2">RAIDZ2 (RAID 6)</option>
+                  {:else}
+                    <option value="single">Single</option>
+                    <option value="0">RAID 0</option>
+                    <option value="1">RAID 1</option>
+                    <option value="5">RAID 5</option>
+                    <option value="6">RAID 6</option>
+                    <option value="10">RAID 10</option>
+                  {/if}
                 </select>
               </div>
             </div>
