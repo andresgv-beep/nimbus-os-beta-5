@@ -275,12 +275,18 @@ func handleDockerRegexRoutes(w http.ResponseWriter, r *http.Request) bool {
 // ═══════════════════════════════════
 
 func dockerStatus(w http.ResponseWriter, r *http.Request) {
-	session := requireAdmin(w, r)
+	session := requireAuth(w, r)
 	if session == nil {
 		return
 	}
-	conf := getDockerConfigGo()
+	// Allow admin or users with Docker permission
+	role, _ := session["role"].(string)
 	hasPerm := hasDockerPermission(session)
+	if role != "admin" && !hasPerm {
+		jsonError(w, 403, "No permission")
+		return
+	}
+	conf := getDockerConfigGo()
 	dockerRunning := isDockerInstalledGo()
 
 	if dockerRunning && conf["installed"] != true {
@@ -769,11 +775,19 @@ func dockerContainerCreate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	body, _ := readBody(r)
-	id := sanitizeDockerNameGo(bodyStr(body, "id"))
-	name := sanitizeDockerNameGo(bodyStr(body, "name"))
-	image := sanitizeDockerNameGo(bodyStr(body, "image"))
+	rawId := bodyStr(body, "id")
+	rawName := bodyStr(body, "name")
+	rawImage := bodyStr(body, "image")
+	id := sanitizeDockerNameGo(rawId)
+	name := sanitizeDockerNameGo(rawName)
+	image := sanitizeDockerNameGo(rawImage)
 	if id == "" || name == "" || image == "" {
 		jsonError(w, 400, "Missing container info")
+		return
+	}
+	// Reject if sanitization changed the input — means malicious chars were present
+	if id != rawId || name != rawName || image != rawImage {
+		jsonError(w, 400, "Container name, id, or image contains invalid characters")
 		return
 	}
 
@@ -785,10 +799,16 @@ func dockerContainerCreate(w http.ResponseWriter, r *http.Request) {
 
 	cmd := fmt.Sprintf("docker run -d --name %s --restart unless-stopped", id)
 
-	// Ports
+	// Ports — validate strictly
 	if ports, ok := body["ports"].(map[string]interface{}); ok {
+		portRegex := regexp.MustCompile(`^\d{1,5}$`)
 		for host, container := range ports {
-			cmd += fmt.Sprintf(" -p %s:%s", host, fmt.Sprintf("%v", container))
+			containerStr := fmt.Sprintf("%v", container)
+			if !portRegex.MatchString(host) || !portRegex.MatchString(containerStr) {
+				jsonError(w, 400, "Invalid port mapping (must be numeric)")
+				return
+			}
+			cmd += fmt.Sprintf(" -p %s:%s", host, containerStr)
 		}
 	}
 
@@ -1055,9 +1075,15 @@ func dockerContainerRebuild(w http.ResponseWriter, r *http.Request, id string) {
 		return
 	}
 	image := strings.TrimSpace(imgOut)
+	// Validate the image name from docker inspect before reusing
+	safeImage := sanitizeDockerNameGo(image)
+	if safeImage == "" || safeImage != image {
+		jsonError(w, 500, "Container has invalid image name")
+		return
+	}
 	run(fmt.Sprintf("docker stop %s 2>/dev/null", safeId))
 	run(fmt.Sprintf("docker rm %s 2>/dev/null", safeId))
-	run(fmt.Sprintf("docker run -d --name %s --restart unless-stopped %s", safeId, image))
+	run(fmt.Sprintf("docker run -d --name %s --restart unless-stopped %s", safeId, safeImage))
 	jsonOk(w, map[string]interface{}{"ok": true, "containerId": safeId})
 }
 
@@ -1119,7 +1145,7 @@ func dockerPull(w http.ResponseWriter, r *http.Request) {
 	rawImage := strings.TrimPrefix(r.URL.Path, "/api/docker/pull/")
 	decoded, _ := url.PathUnescape(rawImage)
 	image := sanitizeDockerNameGo(decoded)
-	if image == "" {
+	if image == "" || image != decoded {
 		jsonError(w, 400, "Invalid image name")
 		return
 	}
@@ -1184,6 +1210,30 @@ func firewallAddRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Strict validation — prevent command injection
+	// Port: digits only, or digits:digits for ranges
+	if matched, _ := regexp.MatchString(`^\d{1,5}(:\d{1,5})?$`, port); !matched {
+		jsonError(w, 400, "Invalid port format (use number or range like 8000:8100)")
+		return
+	}
+	// Protocol: whitelist only
+	if protocol != "tcp" && protocol != "udp" && protocol != "both" {
+		jsonError(w, 400, "Invalid protocol (must be tcp, udp, or both)")
+		return
+	}
+	// Action: whitelist only
+	if action != "allow" && action != "deny" && action != "reject" && action != "limit" {
+		jsonError(w, 400, "Invalid action (must be allow, deny, reject, or limit)")
+		return
+	}
+	// Source: must be a valid IP or CIDR, or empty/any
+	if source != "" && source != "any" && source != "Any" {
+		if matched, _ := regexp.MatchString(`^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(/\d{1,2})?$`, source); !matched {
+			jsonError(w, 400, "Invalid source (must be IP address or CIDR like 192.168.1.0/24)")
+			return
+		}
+	}
+
 	_, hasUfw := run("which ufw 2>/dev/null")
 	if hasUfw {
 		proto := ""
@@ -1211,6 +1261,11 @@ func firewallRemoveRule(w http.ResponseWriter, r *http.Request) {
 	ruleNum := fmt.Sprintf("%v", body["ruleNum"])
 	if ruleNum == "" {
 		jsonError(w, 400, "ruleNum required")
+		return
+	}
+	// Strict validation — ruleNum must be a positive integer
+	if matched, _ := regexp.MatchString(`^\d{1,5}$`, ruleNum); !matched {
+		jsonError(w, 400, "Invalid rule number (must be a positive integer)")
 		return
 	}
 	result, _ := run(fmt.Sprintf(`echo "y" | ufw delete %s 2>&1`, ruleNum))

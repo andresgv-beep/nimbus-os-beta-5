@@ -106,6 +106,10 @@ func sharesCreateHTTP(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, 400, "Folder name required")
 		return
 	}
+	if len(name) > 64 {
+		jsonError(w, 400, "Folder name too long (max 64 characters)")
+		return
+	}
 	if matched, _ := regexp.MatchString(`[^a-zA-Z0-9_\- ]`, name); matched {
 		jsonError(w, 400, "Name can only contain letters, numbers, spaces, -, _")
 		return

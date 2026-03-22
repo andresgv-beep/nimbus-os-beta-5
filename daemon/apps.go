@@ -532,7 +532,15 @@ func handleInstalledAppsRoutes(w http.ResponseWriter, r *http.Request) {
 }
 
 func downloadAppIcon(appId, iconUrl string) string {
-	iconsDir := filepath.Join(nimbusRoot, "..", "opt", "nimbusos", "public", "app-icons")
+	// Validate URL format to prevent command injection
+	if !strings.HasPrefix(iconUrl, "http://") && !strings.HasPrefix(iconUrl, "https://") {
+		return ""
+	}
+	// Reject URLs with shell-dangerous characters
+	if strings.ContainsAny(iconUrl, "\"'`$;|&<>(){}\\") {
+		return ""
+	}
+
 	// Try common locations
 	for _, dir := range []string{
 		"/opt/nimbusos/public/app-icons",
@@ -548,10 +556,11 @@ func downloadAppIcon(appId, iconUrl string) string {
 			ext = ".webp"
 		}
 		localPath := filepath.Join(dir, appId+ext)
-		if _, ok := run(fmt.Sprintf(`curl -sL -o "%s" "%s"`, localPath, iconUrl)); ok {
+		// Use exec.Command instead of shell interpolation to avoid injection
+		cmd := exec.Command("curl", "-sL", "-o", localPath, "--max-time", "15", iconUrl)
+		if err := cmd.Run(); err == nil {
 			return "/app-icons/" + appId + ext
 		}
 	}
-	_ = iconsDir
 	return ""
 }

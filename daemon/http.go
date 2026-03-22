@@ -166,7 +166,7 @@ func corsMiddleware(next http.Handler) http.Handler {
 		// Security headers
 		w.Header().Set("X-Frame-Options", "SAMEORIGIN")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; frame-src 'self'")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://raw.githubusercontent.com; connect-src 'self' https://raw.githubusercontent.com; frame-src 'self' http://127.0.0.1:* http://localhost:*")
 		w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
 
 		// CORS — only reflect same-host or local origins
@@ -190,23 +190,60 @@ func corsMiddleware(next http.Handler) http.Handler {
 }
 
 // isLocalOrigin checks if the origin is localhost, LAN IP, or .local domain
+// Uses proper URL parsing to prevent bypass via substrings (e.g. localhost.evil.com)
 func isLocalOrigin(origin string) bool {
 	origin = strings.ToLower(origin)
-	if strings.Contains(origin, "localhost") || strings.Contains(origin, "127.0.0.1") {
+
+	// Parse the origin to extract the hostname properly
+	// Origins are like "http://hostname:port"
+	host := origin
+	// Strip scheme
+	if idx := strings.Index(host, "://"); idx != -1 {
+		host = host[idx+3:]
+	}
+	// Strip port
+	if idx := strings.LastIndex(host, ":"); idx != -1 {
+		// Make sure it's actually a port, not part of IPv6
+		portPart := host[idx+1:]
+		if matched, _ := regexp.MatchString(`^\d+$`, portPart); matched {
+			host = host[:idx]
+		}
+	}
+	// Strip trailing slash
+	host = strings.TrimRight(host, "/")
+
+	if host == "" {
+		return false
+	}
+
+	// Exact matches for localhost
+	if host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "[::1]" {
 		return true
 	}
-	// Allow LAN IPs: 192.168.x.x, 10.x.x.x, 172.16-31.x.x
-	if strings.Contains(origin, "192.168.") || strings.Contains(origin, "10.") {
+
+	// .local mDNS domains — must END with .local (not contain it)
+	if strings.HasSuffix(host, ".local") {
 		return true
 	}
-	// Allow .local domains (mDNS)
-	if strings.Contains(origin, ".local") {
-		return true
+
+	// LAN IPs — validate they are actual IPs, not subdomains
+	// Must be a valid IP pattern (digits and dots only, no letters)
+	if matched, _ := regexp.MatchString(`^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$`, host); matched {
+		// Check private ranges
+		if strings.HasPrefix(host, "192.168.") ||
+			strings.HasPrefix(host, "10.") ||
+			strings.HasPrefix(host, "172.16.") || strings.HasPrefix(host, "172.17.") ||
+			strings.HasPrefix(host, "172.18.") || strings.HasPrefix(host, "172.19.") ||
+			strings.HasPrefix(host, "172.20.") || strings.HasPrefix(host, "172.21.") ||
+			strings.HasPrefix(host, "172.22.") || strings.HasPrefix(host, "172.23.") ||
+			strings.HasPrefix(host, "172.24.") || strings.HasPrefix(host, "172.25.") ||
+			strings.HasPrefix(host, "172.26.") || strings.HasPrefix(host, "172.27.") ||
+			strings.HasPrefix(host, "172.28.") || strings.HasPrefix(host, "172.29.") ||
+			strings.HasPrefix(host, "172.30.") || strings.HasPrefix(host, "172.31.") {
+			return true
+		}
 	}
-	// Allow same port (NimOS UI served from same host)
-	if strings.Contains(origin, ":5000") || strings.Contains(origin, ":5009") {
-		return true
-	}
+
 	return false
 }
 
@@ -400,6 +437,29 @@ func handleAppAccessRoutes(w http.ResponseWriter, r *http.Request) {
 		permission := bodyStr(body, "permission")
 		if username == "" || appId == "" {
 			jsonError(w, 400, "username and appId required")
+			return
+		}
+		// Validate username format and exists in DB
+		if matched, _ := regexp.MatchString(`^[a-z][a-z0-9_]{1,31}$`, username); !matched {
+			jsonError(w, 400, "Invalid username format")
+			return
+		}
+		if users, err := dbUsersList(); err == nil {
+			found := false
+			for _, u := range users {
+				if un, _ := u["username"].(string); un == username {
+					found = true
+					break
+				}
+			}
+			if !found {
+				jsonError(w, 404, "User not found")
+				return
+			}
+		}
+		// Validate appId format — alphanumeric + dashes only
+		if matched, _ := regexp.MatchString(`^[a-zA-Z0-9_-]{1,64}$`, appId); !matched {
+			jsonError(w, 400, "Invalid appId format")
 			return
 		}
 		if permission == "" {

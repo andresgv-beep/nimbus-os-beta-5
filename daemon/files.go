@@ -517,9 +517,24 @@ func handleFileUpload(w http.ResponseWriter, r *http.Request) {
 }
 
 func sanitizeFileName(name string) string {
+	// Extract only the base filename — strip any directory path components
+	name = filepath.Base(name)
+	// Reject . and .. explicitly
+	if name == "." || name == ".." || name == "" {
+		return ""
+	}
+	// Remove dangerous characters
 	re := regexp.MustCompile(`[\/\\:*?"<>|]`)
 	name = re.ReplaceAllString(name, "_")
 	name = strings.ReplaceAll(name, "..", "")
+	// Remove null bytes
+	name = strings.ReplaceAll(name, "\x00", "")
+	// Trim leading dots (hidden files on Linux)
+	// This is optional — uncomment if you want to prevent hidden file creation
+	// name = strings.TrimLeft(name, ".")
+	if name == "" {
+		return ""
+	}
 	return name
 }
 

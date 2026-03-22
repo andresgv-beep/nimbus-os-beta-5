@@ -1048,6 +1048,10 @@ func handleUserRoutes(w http.ResponseWriter, r *http.Request) {
 		userPlaylistRemove(w, r)
 
 	default:
+		// Check auth before 404 — prevents route enumeration
+		if requireAuth(w, r) == nil {
+			return
+		}
 		jsonError(w, 404, "Not found")
 	}
 }
