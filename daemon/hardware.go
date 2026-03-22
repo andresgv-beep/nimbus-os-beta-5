@@ -52,6 +52,9 @@ func detectHardwareTools() {
 		}
 	}
 
+	// Btrfs detection
+	detectBtrfs()
+
 	// System info
 	archOut, _ := run("uname -m 2>/dev/null")
 	systemArch = strings.TrimSpace(archOut)

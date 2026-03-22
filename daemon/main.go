@@ -627,6 +627,9 @@ func main() {
 	zfsAutoImportOnStartup()
 	startZfsScheduler()
 
+	// Btrfs: auto-mount pools
+	btrfsAutoMountOnStartup()
+
 	// Clean up stale socket
 	os.Remove(socketPath)
 

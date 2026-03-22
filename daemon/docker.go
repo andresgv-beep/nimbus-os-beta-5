@@ -44,6 +44,50 @@ func saveDockerConfigGo(config map[string]interface{}) {
 	os.WriteFile(dockerConfigFile, data, 0644)
 }
 
+// getDockerPath returns the docker data path on the pool.
+// Priority: docker.json path → primary pool → first pool → error
+// NEVER returns /var/lib/docker — data must live on a pool.
+func getDockerPath() (string, error) {
+	// 1. Try docker.json config
+	conf := getDockerConfigGo()
+	if p, _ := conf["path"].(string); p != "" && strings.HasPrefix(p, "/nimbus/pools/") {
+		return p, nil
+	}
+
+	// 2. Try to find from storage pools
+	storageConf := getStorageConfigFull()
+	confPools, _ := storageConf["pools"].([]interface{})
+	if len(confPools) == 0 {
+		return "", fmt.Errorf("no storage pools available")
+	}
+
+	// Find primary pool or first pool
+	primaryPool, _ := storageConf["primaryPool"].(string)
+	for _, p := range confPools {
+		pm, _ := p.(map[string]interface{})
+		name, _ := pm["name"].(string)
+		mountPoint, _ := pm["mountPoint"].(string)
+		if name == primaryPool && mountPoint != "" {
+			dockerPath := filepath.Join(mountPoint, "docker")
+			// Save to docker.json for next time
+			conf["path"] = dockerPath
+			saveDockerConfigGo(conf)
+			return dockerPath, nil
+		}
+	}
+
+	// Use first pool
+	pm, _ := confPools[0].(map[string]interface{})
+	if mountPoint, _ := pm["mountPoint"].(string); mountPoint != "" {
+		dockerPath := filepath.Join(mountPoint, "docker")
+		conf["path"] = dockerPath
+		saveDockerConfigGo(conf)
+		return dockerPath, nil
+	}
+
+	return "", fmt.Errorf("no pool with valid mount point found")
+}
+
 func isDockerInstalledGo() bool {
 	_, ok := run("docker --version 2>/dev/null")
 	return ok
@@ -376,7 +420,9 @@ func dockerAppPermissions(w http.ResponseWriter, r *http.Request) {
 	// Check stacks
 	dockerPath, _ := conf["path"].(string)
 	if dockerPath == "" {
-		dockerPath = "/var/lib/docker"
+		if dp, err := getDockerPath(); err == nil {
+			dockerPath = dp
+		}
 	}
 	stacksPath := filepath.Join(dockerPath, "stacks")
 	if entries, err := os.ReadDir(stacksPath); err == nil {
@@ -637,10 +683,23 @@ func dockerInstall(w http.ResponseWriter, r *http.Request) {
 	}
 
 	mountPoint, _ := targetPool["mountPoint"].(string)
-	dockerPath := bodyStr(body, "path")
-	if dockerPath == "" || !strings.HasPrefix(dockerPath, "/") {
-		dockerPath = filepath.Join(mountPoint, "docker")
+	if mountPoint == "" {
+		jsonError(w, 400, "Pool has no mount point configured")
+		return
 	}
+
+	// Verify the pool is actually mounted (not writing to system disk)
+	if !isPathOnMountedPool(filepath.Join(mountPoint, "docker")) {
+		// Pool dir exists but not mounted — try to check if mount point itself is valid
+		mountSrc, ok := run(fmt.Sprintf("findmnt -n -o SOURCE --target %s 2>/dev/null", mountPoint))
+		rootSrc, _ := run("findmnt -n -o SOURCE --target / 2>/dev/null")
+		if !ok || strings.TrimSpace(mountSrc) == "" || strings.TrimSpace(mountSrc) == strings.TrimSpace(rootSrc) {
+			jsonError(w, 400, "Storage pool is not mounted. Check Storage Manager.")
+			return
+		}
+	}
+
+	dockerPath := filepath.Join(mountPoint, "docker")
 
 	os.MkdirAll(filepath.Join(dockerPath, "containers"), 0755)
 	os.MkdirAll(filepath.Join(dockerPath, "volumes"), 0755)
@@ -691,22 +750,38 @@ func dockerInstall(w http.ResponseWriter, r *http.Request) {
 			if targetPool != nil {
 				poolName, _ = targetPool["name"].(string)
 			}
-			// Create the share in DB
+
+			// Create filesystem group and permissions for the docker-apps share
+			// We do this directly instead of handleOp because the share path is
+			// docker/containers (not shares/docker-apps)
+			shareGroup := "nimos-share-docker-apps"
+			run(fmt.Sprintf("groupadd -f %s", shareGroup))
+
+			// Set ownership and ACLs on the containers directory
+			run(fmt.Sprintf(`chown root:%s "%s"`, shareGroup, dockerSharePath))
+			run(fmt.Sprintf(`chmod 2775 "%s"`, dockerSharePath))
+			run(fmt.Sprintf(`setfacl -d -m g:%s:rwx "%s" 2>/dev/null || true`, shareGroup, dockerSharePath))
+
+			// Add service user and admin users to the group
+			run(fmt.Sprintf("usermod -aG %s nimbus 2>/dev/null || true", shareGroup))
+			run(fmt.Sprintf("usermod -aG %s nimos 2>/dev/null || true", shareGroup))
+
+			// Register share in DB
 			dbSharesCreate("docker-apps", "Docker Apps", "Application data for Docker containers", dockerSharePath, poolName, poolName, "system")
-			// Set admin rw permission
+
+			// Set admin permissions
 			if users, err := dbUsersList(); err == nil {
 				for _, u := range users {
 					role, _ := u["role"].(string)
 					username, _ := u["username"].(string)
 					if role == "admin" && username != "" {
 						dbShareSetPermission("docker-apps", username, "rw")
-						// Add user to group for filesystem access
 						run(fmt.Sprintf("usermod -aG docker %s 2>/dev/null || true", username))
+						run(fmt.Sprintf("usermod -aG %s %s 2>/dev/null || true", shareGroup, username))
 					}
 				}
 			}
-			// Set filesystem permissions on containers dir
-			run(fmt.Sprintf(`chmod -R 775 "%s"`, dockerSharePath))
+
 			log.Println("Docker share 'docker-apps' created at", dockerSharePath)
 		}
 	}
@@ -794,7 +869,12 @@ func dockerContainerCreate(w http.ResponseWriter, r *http.Request) {
 	conf := getDockerConfigGo()
 	dockerPath, _ := conf["path"].(string)
 	if dockerPath == "" {
-		dockerPath = "/var/lib/docker"
+		dp, err := getDockerPath()
+		if err != nil {
+			jsonError(w, 400, "Docker not configured — install Docker from App Store first")
+			return
+		}
+		dockerPath = dp
 	}
 
 	cmd := fmt.Sprintf("docker run -d --name %s --restart unless-stopped", id)
@@ -814,7 +894,10 @@ func dockerContainerCreate(w http.ResponseWriter, r *http.Request) {
 
 	// Config volume
 	containerDataPath := filepath.Join(dockerPath, "containers", id)
-	os.MkdirAll(containerDataPath, 0755)
+	os.MkdirAll(containerDataPath, 0775)
+	// Set group ownership for FileManager access
+	run(fmt.Sprintf(`chown root:nimos-share-docker-apps "%s" 2>/dev/null || true`, containerDataPath))
+	run(fmt.Sprintf(`chmod 2775 "%s" 2>/dev/null || true`, containerDataPath))
 	cmd += fmt.Sprintf(" -v %s:/config", containerDataPath)
 
 	// Shared folder mounts
@@ -908,7 +991,12 @@ func dockerStackDeploy(w http.ResponseWriter, r *http.Request) {
 	conf := getDockerConfigGo()
 	dockerPath, _ := conf["path"].(string)
 	if dockerPath == "" {
-		dockerPath = "/var/lib/docker"
+		dp, err := getDockerPath()
+		if err != nil {
+			jsonError(w, 400, "Docker not configured — install Docker from App Store first")
+			return
+		}
+		dockerPath = dp
 	}
 	stackPath := filepath.Join(dockerPath, "stacks", id)
 	os.MkdirAll(stackPath, 0755)
@@ -941,7 +1029,10 @@ func dockerStackDeploy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Fix permissions on container config dir after deploy
-	run(fmt.Sprintf(`chmod -R 775 "%s" 2>/dev/null || true`, containerPath))
+	// Set group to nimos-share-docker-apps so FileManager can browse
+	run(fmt.Sprintf(`chown -R root:nimos-share-docker-apps "%s" 2>/dev/null || true`, containerPath))
+	run(fmt.Sprintf(`chmod -R 2775 "%s" 2>/dev/null || true`, containerPath))
+	run(fmt.Sprintf(`setfacl -R -d -m g:nimos-share-docker-apps:rwx "%s" 2>/dev/null || true`, containerPath))
 	run(fmt.Sprintf(`chmod -R 775 "%s" 2>/dev/null || true`, stackPath))
 
 	// Register
@@ -1114,7 +1205,12 @@ func dockerStackDelete(w http.ResponseWriter, r *http.Request, id string) {
 	conf := getDockerConfigGo()
 	dockerPath, _ := conf["path"].(string)
 	if dockerPath == "" {
-		dockerPath = "/var/lib/docker"
+		if dp, err := getDockerPath(); err == nil {
+			dockerPath = dp
+		} else {
+			jsonOk(w, map[string]interface{}{"ok": true})
+			return
+		}
 	}
 	stackPath := filepath.Join(dockerPath, "stacks", safeId)
 	composePath := filepath.Join(stackPath, "docker-compose.yml")

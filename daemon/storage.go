@@ -230,18 +230,8 @@ func detectStorageDisksGo() map[string]interface{} {
 		// Eligible
 		isBoot := devName == rootDisk
 		if isBoot {
-			minFree := int64(5 * 1024 * 1024 * 1024)
-			if freeSpace >= minFree {
-				if rotaBool {
-					diskInfo["classification"] = "hdd"
-				} else {
-					diskInfo["classification"] = "ssd"
-				}
-				diskInfo["availableSpace"] = freeSpace
-				diskInfo["availableSpaceFormatted"] = formatBytes(freeSpace)
-				diskInfo["hasExistingData"] = false
-				eligible = append(eligible, diskInfo)
-			}
+			// System disk — NEVER eligible for pool creation or wipe
+			continue
 		} else {
 			if rotaBool {
 				diskInfo["classification"] = "hdd"
@@ -414,6 +404,10 @@ func getStoragePoolsGo() []map[string]interface{} {
 		poolType, _ := poolConf["type"].(string)
 		if poolType == "zfs" {
 			pools = append(pools, getZfsPoolInfo(poolConf, primaryPool))
+			continue
+		}
+		if poolType == "btrfs" {
+			pools = append(pools, getBtrfsPoolInfo(poolConf, primaryPool))
 			continue
 		}
 
@@ -1555,6 +1549,10 @@ func handleStorageRoutes(w http.ResponseWriter, r *http.Request) {
 		if hasZfs && handleZfsRoutes(w, r, method, urlPath, session, nil) {
 			return
 		}
+		// Try Btrfs routes
+		if hasBtrfs && handleBtrfsRoutes(w, r, method, urlPath, session, nil) {
+			return
+		}
 
 		switch urlPath {
 		case "/api/storage", "/api/storage/pools":
@@ -1568,15 +1566,20 @@ func handleStorageRoutes(w http.ResponseWriter, r *http.Request) {
 		case "/api/storage/capabilities":
 			jsonOk(w, map[string]interface{}{
 				"zfs":            hasZfs,
+				"btrfs":          hasBtrfs,
 				"mdadm":          hasMdadm,
 				"arch":           systemArch,
 				"ramGB":          systemRamGB,
-				"recommended":    func() string { if hasZfs { return "zfs" }; return "mdadm" }(),
-				"zfsReason":      func() string {
-					if hasZfs { return "ZFS available" }
-					if systemArch != "x86_64" { return "ARM architecture — mdadm recommended" }
-					if systemRamGB < 4 { return fmt.Sprintf("Insufficient RAM (%dGB) — ZFS needs 4GB+", systemRamGB) }
-					return "ZFS not installed"
+				"recommended":    func() string {
+					if hasZfs && systemRamGB >= 4 { return "zfs" }
+					if hasBtrfs { return "btrfs" }
+					return "mdadm"
+				}(),
+				"reason":         func() string {
+					if hasZfs && systemRamGB >= 4 { return "ZFS available — best data protection" }
+					if hasBtrfs { return "Btrfs available — snapshots, checksums, RAID" }
+					if hasZfs { return fmt.Sprintf("ZFS available but low RAM (%dGB) — Btrfs recommended", systemRamGB) }
+					return "Only mdadm available — consider installing btrfs-progs"
 				}(),
 			})
 		case "/api/storage/health":
@@ -1603,12 +1606,21 @@ func handleStorageRoutes(w http.ResponseWriter, r *http.Request) {
 		if hasZfs && handleZfsRoutes(w, r, method, urlPath, session, body) {
 			return
 		}
+		// Try Btrfs routes
+		if hasBtrfs && handleBtrfsRoutes(w, r, method, urlPath, session, body) {
+			return
+		}
 
 		switch urlPath {
 		case "/api/storage/pool":
 			poolType := bodyStr(body, "type")
 			if poolType == "zfs" && hasZfs {
 				jsonOk(w, createPoolZfs(body))
+			} else if poolType == "btrfs" && hasBtrfs {
+				jsonOk(w, createPoolBtrfs(body))
+			} else if hasBtrfs {
+				// Default to Btrfs if available (preferred over mdadm)
+				jsonOk(w, createPoolBtrfs(body))
 			} else {
 				jsonOk(w, createPoolGo(body))
 			}
@@ -1637,15 +1649,18 @@ func handleStorageRoutes(w http.ResponseWriter, r *http.Request) {
 				for _, p := range confPools {
 					pm, _ := p.(map[string]interface{})
 					if n, _ := pm["name"].(string); n == name {
-						if t, _ := pm["type"].(string); t == "zfs" {
-							poolType = "zfs"
+						if t, _ := pm["type"].(string); t != "" {
+							poolType = t
 						}
 						break
 					}
 				}
-				if poolType == "zfs" {
+				switch poolType {
+				case "zfs":
 					jsonOk(w, destroyPoolZfs(name))
-				} else {
+				case "btrfs":
+					jsonOk(w, destroyPoolBtrfs(name))
+				default:
 					jsonOk(w, destroyPoolGo(name))
 				}
 			}
