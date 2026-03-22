@@ -8,7 +8,7 @@ export const APP_META = {
   containers:   { name: 'Containers',      icon: '/icons/containers.png',  width: 800, height: 520 },
   mediaplayer:  { name: 'Media Player',    icon: '/icons/media.png',       width: 650, height: 500 },
   appstore:     { name: 'App Store',       icon: '/icons/appstore.png',    width: 900, height: 600 },
-  texteditor:   { name: 'Text Editor',     icon: '/icons/notes.png',       width: 700, height: 500 },
+  texteditor:   { name: 'Notes',           icon: '/icons/notes.png',       width: 860, height: 560 },
   terminal:     { name: 'Terminal',        icon: '/icons/terminal.png',    width: 700, height: 450 },
   vms:          { name: 'Virtual Machines',icon: '/icons/vms.png',         width: 850, height: 550 },
 };
