@@ -52,7 +52,7 @@
       e.preventDefault();
       if (!item) {
         if (clipboard && currentShare) {
-          ctxMenu = { x: e.clientX, y: e.clientY, file: null, idx: -1 };
+          const p = calcMenuPos(e); ctxMenu = { x: p.x, y: p.y, file: null, idx: -1 };
         }
         return;
       }
@@ -60,7 +60,7 @@
       const file = sorted[idx];
       if (!file) return;
       if (!selected.has(idx)) selected = new Set([idx]);
-      ctxMenu = { x: e.clientX, y: e.clientY, file, idx };
+      const p = calcMenuPos(e); ctxMenu = { x: p.x, y: p.y, file, idx };
     };
 
     const handleMouseDown = (e) => {
@@ -113,7 +113,7 @@
     ctxTarget = file;
     // Seleccionar el archivo si no está seleccionado
     if (!selected.has(idx)) selected = new Set([idx]);
-    ctxMenu = { x: e.clientX, y: e.clientY, file, idx };
+    const p = calcMenuPos(e); ctxMenu = { x: p.x, y: p.y, file, idx };
   }
 
   function onGridContextMenu(e) {
@@ -122,7 +122,24 @@
     e.preventDefault();
     if (!clipboard || !currentShare) return;
     ctxTarget = null;
-    ctxMenu = { x: e.clientX, y: e.clientY, file: null, idx: -1 };
+    const p = calcMenuPos(e); ctxMenu = { x: p.x, y: p.y, file: null, idx: -1 };
+  }
+
+  function getZoom() { return parseFloat(document.documentElement.style.zoom) || 1; }
+
+  function calcMenuPos(e, menuW = 200, menuH = 290) {
+    const z = getZoom();
+    const x = e.clientX / z;
+    const y = e.clientY / z;
+    // Usar el contenedor raíz de la app para calcular límites
+    const root = document.querySelector('.files-root');
+    const rect = root ? root.getBoundingClientRect() : null;
+    const maxX = rect ? (rect.right / z) - 8 : (window.innerWidth / z) - 8;
+    const maxY = rect ? (rect.bottom / z) - 8 : (window.innerHeight / z) - 8;
+    return {
+      x: x + menuW > maxX ? x - menuW : x,
+      y: y + menuH > maxY ? y - menuH : y,
+    };
   }
 
   function closeCtx() { ctxMenu = null; ctxTarget = null; }
