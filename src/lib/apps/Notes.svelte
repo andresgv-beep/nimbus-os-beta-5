@@ -191,7 +191,6 @@
   }
 
   onMount(() => {
-    loadShares();
     window.addEventListener('keydown', onKeyDown);
   });
   onDestroy(() => window.removeEventListener('keydown', onKeyDown));
@@ -240,16 +239,6 @@
             <span class="sb-ext" style="color:{getLangColor(item.name)}">{getExt(item.name)}</span>
           </div>
         {/if}
-      {/each}
-    {:else if shares.length > 0 && openFiles.length === 0}
-      <div class="sb-section" style="margin-top:12px">Carpetas</div>
-      {#each shares as s}
-        <!-- svelte-ignore a11y_click_events_have_key_events -->
-        <!-- svelte-ignore a11y_no_static_element_interactions -->
-        <div class="sb-item" on:click={() => openProject(s.name)}>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="width:13px;height:13px;flex-shrink:0;opacity:.5"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-          <span class="sb-item-name">{s.displayName || s.name}</span>
-        </div>
       {/each}
     {/if}
   </div>
@@ -397,7 +386,7 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
           </div>
           <div class="empty-title">Sin archivo abierto</div>
-          <div class="empty-desc">Abre un archivo desde el File Manager o selecciona una carpeta del sidebar</div>
+          <div class="empty-desc">Usa ··· → Abrir archivo para empezar, o arrastra un archivo aquí</div>
         </div>
       {/if}
 
