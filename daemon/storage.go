@@ -877,6 +877,39 @@ func wipeDiskGo(diskPath string) map[string]interface{} {
 
 	// ── Phase 1: Stop everything using this disk ──
 
+	// Find any Btrfs filesystem using this disk and unmount it
+	btrfsShow, _ := run(fmt.Sprintf("btrfs filesystem show %s 2>/dev/null", diskPath))
+	if btrfsShow != "" && !strings.Contains(btrfsShow, "No valid") {
+		// Find mount point for any Btrfs fs containing this disk
+		for _, line := range strings.Split(btrfsShow, "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "devid") && strings.Contains(line, "path") {
+				// Extract device path from line like: devid    1 size 1.82TiB used 2.01GiB path /dev/sda
+				parts := strings.Fields(line)
+				for i, p := range parts {
+					if p == "path" && i+1 < len(parts) {
+						dev := parts[i+1]
+						mnt, _ := run(fmt.Sprintf("findmnt -n -o TARGET %s 2>/dev/null", dev))
+						mnt = strings.TrimSpace(mnt)
+						if mnt != "" {
+							run(fmt.Sprintf("umount -l %s 2>/dev/null || true", mnt))
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// ZFS: check if disk is part of a zpool
+	if hasZfs {
+		zpoolStatus, _ := run("zpool status 2>/dev/null")
+		if strings.Contains(zpoolStatus, filepath.Base(diskPath)) {
+			// Find which pool and export/destroy it if needed
+			// For now just try to export all pools using this disk
+			run(fmt.Sprintf("zpool labelclear -f %s 2>/dev/null || true", diskPath))
+		}
+	}
+
 	// Unmount all partitions
 	partitions, _ := run(fmt.Sprintf("lsblk -ln -o NAME %s 2>/dev/null | tail -n +2", diskPath))
 	for _, p := range strings.Fields(partitions) {
@@ -924,6 +957,22 @@ func wipeDiskGo(diskPath string) map[string]interface{} {
 
 	// ── Phase 2: Destroy partition table and signatures ──
 
+	// First: wipefs on all partitions (clears Btrfs/ZFS/ext4 signatures)
+	partsForWipe, _ := run(fmt.Sprintf("lsblk -ln -o NAME %s 2>/dev/null | tail -n +2", diskPath))
+	for _, p := range strings.Fields(partsForWipe) {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			run(fmt.Sprintf("wipefs -af /dev/%s 2>/dev/null || true", p))
+		}
+	}
+	// Then wipefs on the disk itself
+	run(fmt.Sprintf("wipefs -af %s 2>/dev/null || true", diskPath))
+
+	// Clear ZFS labels if ZFS is available
+	if hasZfs {
+		run(fmt.Sprintf("zpool labelclear -f %s 2>/dev/null || true", diskPath))
+	}
+
 	// Zero first and last 10MB (GPT has backup at end of disk)
 	run(fmt.Sprintf("dd if=/dev/zero of=%s bs=1M count=10 conv=notrunc 2>/dev/null || true", diskPath))
 	diskSize, _ := run(fmt.Sprintf("blockdev --getsize64 %s 2>/dev/null", diskPath))
@@ -939,8 +988,8 @@ func wipeDiskGo(diskPath string) map[string]interface{} {
 		run(fmt.Sprintf("sgdisk -Z %s 2>/dev/null || true", diskPath))
 	}
 
-	// Wipe all filesystem signatures
-	run(fmt.Sprintf("wipefs -af %s 2>&1 || true", diskPath))
+	// Final wipefs pass (catch anything sgdisk/dd missed)
+	run(fmt.Sprintf("wipefs -af %s 2>/dev/null || true", diskPath))
 
 	// ── Phase 3: Force kernel to forget partitions ──
 
