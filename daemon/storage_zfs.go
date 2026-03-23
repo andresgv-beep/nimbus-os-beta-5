@@ -190,21 +190,80 @@ func destroyPoolZfs(poolName string) map[string]interface{} {
 	}
 	poolType, _ := poolConf["type"].(string)
 	if poolType != "zfs" {
-		return map[string]interface{}{"error": "Not a ZFS pool — use mdadm destroy"}
+		return map[string]interface{}{"error": "Not a ZFS pool"}
 	}
 
 	zpoolName, _ := poolConf["zpoolName"].(string)
 	if zpoolName == "" {
 		zpoolName = "nimos-" + poolName
 	}
+	mountPoint, _ := poolConf["mountPoint"].(string)
 
-	// Destroy the zpool (this unmounts everything)
-	out, ok := run(fmt.Sprintf("zpool destroy -f %s 2>&1", zpoolName))
-	if !ok {
-		return map[string]interface{}{"error": fmt.Sprintf("zpool destroy failed: %s", out)}
+	logMsg("Destroying ZFS pool '%s' (zpool: %s, mount: %s)", poolName, zpoolName, mountPoint)
+
+	// ── 1. Delete shares from DB ──
+	shares, _ := dbSharesList()
+	for _, s := range shares {
+		sharPool, _ := s["pool"].(string)
+		sharVolume, _ := s["volume"].(string)
+		sharPath, _ := s["path"].(string)
+		sharName, _ := s["name"].(string)
+		if sharPool == poolName || sharVolume == poolName || (mountPoint != "" && strings.HasPrefix(sharPath, mountPoint)) {
+			handleOp(Request{Op: "share.delete", ShareName: sharName})
+			dbSharesDelete(sharName)
+		}
 	}
 
-	// Remove from config
+	// ── 2. Stop Docker if on this pool ──
+	dockerConf := getDockerConfigGo()
+	dockerPath, _ := dockerConf["path"].(string)
+	if dockerPath != "" && mountPoint != "" && strings.HasPrefix(dockerPath, mountPoint) {
+		run("docker stop $(docker ps -aq) 2>/dev/null || true")
+		run("docker rm $(docker ps -aq) 2>/dev/null || true")
+		run("systemctl stop docker containerd 2>/dev/null || true")
+		run("rm -f /etc/docker/daemon.json 2>/dev/null || true")
+		saveDockerConfigGo(map[string]interface{}{
+			"installed": false, "path": nil, "permissions": []interface{}{},
+			"appPermissions": map[string]interface{}{},
+		})
+		saveInstalledApps([]map[string]interface{}{})
+		run("groupdel nimos-share-docker-apps 2>/dev/null || true")
+		logMsg("Docker stopped and config cleaned (was on pool '%s')", poolName)
+	}
+
+	// ── 3. Unmount any overlay/bind mounts on the pool ──
+	if mountPoint != "" {
+		// Kill any processes using the pool
+		run(fmt.Sprintf("fuser -km %s 2>/dev/null || true", mountPoint))
+		// Unmount all submounts (overlay, bind, etc.)
+		mountsOut, _ := run(fmt.Sprintf("findmnt -rn -o TARGET %s 2>/dev/null", mountPoint))
+		// Reverse order to unmount children first
+		mounts := strings.Split(strings.TrimSpace(mountsOut), "\n")
+		for i := len(mounts) - 1; i >= 0; i-- {
+			m := strings.TrimSpace(mounts[i])
+			if m != "" && m != mountPoint {
+				run(fmt.Sprintf("umount -l %s 2>/dev/null || true", m))
+			}
+		}
+	}
+
+	// ── 4. Destroy the zpool ──
+	out, ok := run(fmt.Sprintf("zpool destroy -f %s 2>&1", zpoolName))
+	if !ok {
+		// One more try after a short wait
+		time.Sleep(2 * time.Second)
+		out, ok = run(fmt.Sprintf("zpool destroy -f %s 2>&1", zpoolName))
+		if !ok {
+			return map[string]interface{}{"error": fmt.Sprintf("zpool destroy failed: %s", out)}
+		}
+	}
+
+	// ── 5. Remove mount point directory ──
+	if mountPoint != "" && strings.HasPrefix(mountPoint, nimbusPoolsDir) {
+		os.RemoveAll(mountPoint)
+	}
+
+	// ── 6. Remove from storage.json ──
 	confPools = append(confPools[:poolIdx], confPools[poolIdx+1:]...)
 	conf["pools"] = confPools
 	if primary, _ := conf["primaryPool"].(string); primary == poolName {
@@ -214,11 +273,16 @@ func destroyPoolZfs(poolName string) map[string]interface{} {
 			}
 		} else {
 			conf["primaryPool"] = nil
+			conf["configuredAt"] = nil
 		}
 	}
 	saveStorageConfigFull(conf)
 
-	logMsg("ZFS pool '%s' destroyed", poolName)
+	// ── 7. Rescan disks ──
+	run("partprobe 2>/dev/null || true")
+	rescanSCSIBuses()
+
+	logMsg("ZFS pool '%s' fully destroyed", poolName)
 	return map[string]interface{}{"ok": true}
 }
 

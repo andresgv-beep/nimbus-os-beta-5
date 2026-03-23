@@ -263,7 +263,7 @@ func destroyPoolBtrfs(poolName string) map[string]interface{} {
 	if dockerPath != "" && mountPoint != "" && strings.HasPrefix(dockerPath, mountPoint) {
 		run("docker stop $(docker ps -aq) 2>/dev/null || true")
 		run("docker rm $(docker ps -aq) 2>/dev/null || true")
-		run("systemctl stop docker 2>/dev/null || true")
+		run("systemctl stop docker containerd 2>/dev/null || true")
 		run("rm -f /etc/docker/daemon.json 2>/dev/null || true")
 		saveDockerConfigGo(map[string]interface{}{
 			"installed": false, "path": nil, "permissions": []interface{}{},
@@ -273,9 +273,21 @@ func destroyPoolBtrfs(poolName string) map[string]interface{} {
 		run("groupdel nimos-share-docker-apps 2>/dev/null || true")
 	}
 
-	// ── 3. Unmount ──
-	run(fmt.Sprintf("umount -l %s 2>/dev/null || true", mountPoint))
-	run(fmt.Sprintf("umount -f %s 2>/dev/null || true", mountPoint))
+	// ── 3. Kill processes and unmount submounts ──
+	if mountPoint != "" {
+		run(fmt.Sprintf("fuser -km %s 2>/dev/null || true", mountPoint))
+		// Unmount all submounts (overlay, bind, etc.) in reverse order
+		mountsOut, _ := run(fmt.Sprintf("findmnt -rn -o TARGET %s 2>/dev/null", mountPoint))
+		mounts := strings.Split(strings.TrimSpace(mountsOut), "\n")
+		for i := len(mounts) - 1; i >= 0; i-- {
+			m := strings.TrimSpace(mounts[i])
+			if m != "" && m != mountPoint {
+				run(fmt.Sprintf("umount -l %s 2>/dev/null || true", m))
+			}
+		}
+		run(fmt.Sprintf("umount -l %s 2>/dev/null || true", mountPoint))
+		run(fmt.Sprintf("umount -f %s 2>/dev/null || true", mountPoint))
+	}
 
 	// ── 4. Wipe filesystem signatures ──
 	for _, disk := range poolDisks {
