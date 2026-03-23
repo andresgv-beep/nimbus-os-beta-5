@@ -656,6 +656,7 @@ func dockerInstall(w http.ResponseWriter, r *http.Request) {
 	}
 	body, _ := readBody(r)
 
+	// ── 1. Find the target pool ──
 	storageConf := getStorageConfigFull()
 	confPools, _ := storageConf["pools"].([]interface{})
 	if len(confPools) == 0 {
@@ -688,101 +689,103 @@ func dockerInstall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Verify the pool is actually mounted (not writing to system disk)
-	if !isPathOnMountedPool(filepath.Join(mountPoint, "docker")) {
-		// Pool dir exists but not mounted — try to check if mount point itself is valid
-		mountSrc, ok := run(fmt.Sprintf("findmnt -n -o SOURCE --target %s 2>/dev/null", mountPoint))
-		rootSrc, _ := run("findmnt -n -o SOURCE --target / 2>/dev/null")
-		if !ok || strings.TrimSpace(mountSrc) == "" || strings.TrimSpace(mountSrc) == strings.TrimSpace(rootSrc) {
-			jsonError(w, 400, "Storage pool is not mounted. Check Storage Manager.")
-			return
-		}
-	}
-
-	dockerPath := filepath.Join(mountPoint, "docker")
-
-	// Verify we're writing to the pool, not the system disk
+	// ── 2. Verify pool is REALLY mounted ──
 	mountSrc, _ := run(fmt.Sprintf("findmnt -n -o SOURCE %s 2>/dev/null", mountPoint))
 	rootSrc, _ := run("findmnt -n -o SOURCE / 2>/dev/null")
 	if strings.TrimSpace(mountSrc) == "" || strings.TrimSpace(mountSrc) == strings.TrimSpace(rootSrc) {
-		jsonError(w, 400, "Pool is not mounted — cannot install Docker. Try refreshing Storage Manager.")
+		jsonError(w, 400, "Storage pool is not mounted. Check Storage Manager.")
 		return
 	}
 
-	// Create ALL Docker directories on the pool
+	dockerPath := filepath.Join(mountPoint, "docker")
+	dockerDataPath := filepath.Join(dockerPath, "data")
+
+	// ── 3. Create ALL directories on the pool FIRST ──
 	for _, dir := range []string{"data", "containers", "stacks", "volumes"} {
-		p := filepath.Join(dockerPath, dir)
-		if err := os.MkdirAll(p, 0755); err != nil {
-			log.Printf("Warning: could not create %s: %v", p, err)
+		if err := os.MkdirAll(filepath.Join(dockerPath, dir), 0755); err != nil {
+			jsonError(w, 500, fmt.Sprintf("Failed to create directory: %v", err))
+			return
 		}
 	}
 	log.Printf("Docker directories created at %s", dockerPath)
 
+	// ── 4. Create daemon.json BEFORE Docker ever starts ──
+	os.MkdirAll("/etc/docker", 0755)
+	daemonConf := map[string]interface{}{"data-root": dockerDataPath}
+	daemonData, _ := json.MarshalIndent(daemonConf, "", "  ")
+	if err := os.WriteFile("/etc/docker/daemon.json", daemonData, 0644); err != nil {
+		jsonError(w, 500, fmt.Sprintf("Failed to write daemon.json: %v", err))
+		return
+	}
+	log.Printf("Docker daemon.json → data-root=%s", dockerDataPath)
+
+	// ── 5. Install Docker if not present ──
 	dockerAvailable := isDockerInstalledGo()
 	if !dockerAvailable {
 		log.Println("Docker not found, installing...")
+		run("systemctl stop docker.socket docker containerd 2>/dev/null || true")
+
 		ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
 		defer cancel()
 		cmd := exec.CommandContext(ctx, "bash", "-c", "curl -fsSL https://get.docker.com | sh")
 		cmd.Env = append(os.Environ(), "DEBIAN_FRONTEND=noninteractive")
-		out, err := cmd.CombinedOutput()
+		installOut, err := cmd.CombinedOutput()
 		if err != nil {
-			log.Printf("Docker install failed: %v\nOutput: %s", err, string(out))
-		} else {
-			log.Println("Docker installed successfully")
-			run("usermod -aG docker nimbus 2>/dev/null || true")
-			run("usermod -aG docker nimos 2>/dev/null || true")
-			dockerAvailable = true
+			log.Printf("Docker install failed: %v\nOutput: %s", err, string(installOut))
+			jsonError(w, 500, "Docker installation failed. Check system logs.")
+			return
 		}
+		log.Println("Docker engine installed")
+		run("usermod -aG docker nimbus 2>/dev/null || true")
+		run("usermod -aG docker nimos 2>/dev/null || true")
+		dockerAvailable = true
+		// Stop whatever the installer started — we restart with our config
+		run("systemctl stop docker.socket docker containerd 2>/dev/null || true")
+	} else {
+		// Docker exists — stop to reconfigure
+		run("systemctl stop docker.socket docker containerd 2>/dev/null || true")
 	}
 
-	if dockerAvailable {
-		dockerDataPath := filepath.Join(dockerPath, "data")
-		os.MkdirAll(dockerDataPath, 0755)
-		os.MkdirAll(filepath.Join(dockerDataPath, "containers"), 0755)
-		os.MkdirAll("/etc/docker", 0755)
-		daemonConf := map[string]interface{}{"data-root": dockerDataPath}
-		data, _ := json.MarshalIndent(daemonConf, "", "  ")
-		os.WriteFile("/etc/docker/daemon.json", data, 0644)
-		run("systemctl enable docker 2>/dev/null")
-		run("systemctl restart docker 2>/dev/null")
+	// ── 6. Kill /var/lib/docker — pool only ──
+	run("rm -rf /var/lib/docker 2>/dev/null || true")
 
-		// Set permissions on docker directories so admin users can browse via FileManager
+	// ── 7. Start Docker with correct config ──
+	if dockerAvailable {
+		run("systemctl enable docker.service docker.socket 2>/dev/null || true")
+		run("systemctl start docker 2>/dev/null || true")
+		time.Sleep(2 * time.Second)
+
+		// Verify
+		rootDir, _ := run("docker info --format '{{.DockerRootDir}}' 2>/dev/null")
+		rootDir = strings.TrimSpace(rootDir)
+		if rootDir != "" && rootDir != dockerDataPath {
+			log.Printf("WARNING: Docker Root Dir=%s expected=%s", rootDir, dockerDataPath)
+		} else {
+			log.Printf("Docker Root Dir confirmed: %s", dockerDataPath)
+		}
+
+		// ── 8. Permissions for FileManager ──
 		run(fmt.Sprintf(`chmod 755 "%s"`, dockerPath))
 		run(fmt.Sprintf(`chmod 755 "%s"`, filepath.Join(dockerPath, "containers")))
 		run(fmt.Sprintf(`chmod 755 "%s"`, filepath.Join(dockerPath, "stacks")))
 		run(fmt.Sprintf(`chmod 755 "%s"`, filepath.Join(dockerPath, "volumes")))
-		// data/ stays restrictive — it's Docker internal storage
 
-		// Create "docker" share automatically so FileManager shows it
+		// ── 9. Create docker-apps share ──
 		dockerSharePath := filepath.Join(dockerPath, "containers")
 		existingShare, _ := dbSharesGet("docker-apps")
 		if existingShare == nil {
-			// Get pool name from config
-			poolName := ""
+			pName := ""
 			if targetPool != nil {
-				poolName, _ = targetPool["name"].(string)
+				pName, _ = targetPool["name"].(string)
 			}
-
-			// Create filesystem group and permissions for the docker-apps share
-			// We do this directly instead of handleOp because the share path is
-			// docker/containers (not shares/docker-apps)
 			shareGroup := "nimos-share-docker-apps"
 			run(fmt.Sprintf("groupadd -f %s", shareGroup))
-
-			// Set ownership and ACLs on the containers directory
 			run(fmt.Sprintf(`chown root:%s "%s"`, shareGroup, dockerSharePath))
 			run(fmt.Sprintf(`chmod 2775 "%s"`, dockerSharePath))
 			run(fmt.Sprintf(`setfacl -d -m g:%s:rwx "%s" 2>/dev/null || true`, shareGroup, dockerSharePath))
-
-			// Add service user and admin users to the group
 			run(fmt.Sprintf("usermod -aG %s nimbus 2>/dev/null || true", shareGroup))
 			run(fmt.Sprintf("usermod -aG %s nimos 2>/dev/null || true", shareGroup))
-
-			// Register share in DB
-			dbSharesCreate("docker-apps", "Docker Apps", "Application data for Docker containers", dockerSharePath, poolName, poolName, "system")
-
-			// Set admin permissions
+			dbSharesCreate("docker-apps", "Docker Apps", "Application data for Docker containers", dockerSharePath, pName, pName, "system")
 			if users, err := dbUsersList(); err == nil {
 				for _, u := range users {
 					role, _ := u["role"].(string)
@@ -794,11 +797,11 @@ func dockerInstall(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 			}
-
 			log.Println("Docker share 'docker-apps' created at", dockerSharePath)
 		}
 	}
 
+	// ── 10. Save config ──
 	conf := getDockerConfigGo()
 	conf["installed"] = true
 	conf["dockerAvailable"] = dockerAvailable
@@ -811,6 +814,7 @@ func dockerInstall(w http.ResponseWriter, r *http.Request) {
 
 	jsonOk(w, map[string]interface{}{"ok": true, "path": dockerPath, "dockerAvailable": dockerAvailable})
 }
+
 
 func dockerUninstall(w http.ResponseWriter, r *http.Request) {
 	session := requireAdmin(w, r)

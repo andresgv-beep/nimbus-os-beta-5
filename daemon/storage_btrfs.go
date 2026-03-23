@@ -261,7 +261,9 @@ func destroyPoolBtrfs(poolName string) map[string]interface{} {
 	if dockerPath != "" && mountPoint != "" && strings.HasPrefix(dockerPath, mountPoint) {
 		run("docker stop $(docker ps -aq) 2>/dev/null || true")
 		run("docker rm $(docker ps -aq) 2>/dev/null || true")
-		run("systemctl stop docker containerd 2>/dev/null || true")
+		run("systemctl stop docker.socket docker containerd 2>/dev/null || true")
+		run("systemctl disable docker.socket docker.service containerd.service 2>/dev/null || true")
+		run("rm -rf /var/lib/docker 2>/dev/null || true")
 		run("rm -f /etc/docker/daemon.json 2>/dev/null || true")
 		saveDockerConfigGo(map[string]interface{}{
 			"installed": false, "path": nil, "permissions": []interface{}{},
