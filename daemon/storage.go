@@ -786,11 +786,6 @@ func createPoolGo(body map[string]interface{}) map[string]interface{} {
 
 func createPoolDirs(mountPoint string) {
 	dirs := []string{
-		"docker/containers",
-		"docker/stacks",
-		"docker/volumes",
-		"docker/data",
-		"docker/data/containers",
 		"shares",
 		"system-backup/config",
 		"system-backup/snapshots",
@@ -1120,41 +1115,13 @@ func destroyPoolGo(poolName string) map[string]interface{} {
 		}
 	}
 
-	// ── 2. Clean Docker if it was on this pool ──
-	dockerConf := getDockerConfigGo()
-	dockerPath, _ := dockerConf["path"].(string)
-	if dockerPath != "" && mountPoint != "" && strings.HasPrefix(dockerPath, mountPoint) {
-		// Docker was on this pool — stop containers and clean config
-		run("docker stop $(docker ps -aq) 2>/dev/null || true")
-		run("docker rm $(docker ps -aq) 2>/dev/null || true")
-		run("systemctl stop docker.socket docker containerd 2>/dev/null || true")
-		run("systemctl disable docker.socket docker.service containerd.service 2>/dev/null || true")
-		run("rm -rf /var/lib/docker 2>/dev/null || true")
-		run("rm -f /etc/docker/daemon.json 2>/dev/null || true")
-
-		// Reset docker.json
-		newDockerConf := map[string]interface{}{
-			"installed": false, "path": nil, "permissions": []interface{}{},
-			"appPermissions": map[string]interface{}{}, "installedAt": nil,
-		}
-		saveDockerConfigGo(newDockerConf)
-
-		// Clear installed apps
-		saveInstalledApps([]map[string]interface{}{})
-
-		// Delete docker-apps share group
-		run("groupdel nimos-share-docker-apps 2>/dev/null || true")
-
-		logMsg("Docker config cleaned (was on pool '%s')", poolName)
-	}
-
-	// ── 3. Unmount the pool ──
+	// ── 2. Unmount the pool ──
 	if mountPoint != "" {
 		run(fmt.Sprintf("umount -l %s 2>/dev/null || true", mountPoint))
 		run(fmt.Sprintf("umount -f %s 2>/dev/null || true", mountPoint))
 	}
 
-	// ── 4. Stop and clean mdadm array ──
+	// ── 3. Stop and clean mdadm array ──
 	if arrayName != "" {
 		run(fmt.Sprintf("mdadm --stop /dev/%s 2>/dev/null || true", arrayName))
 	}
@@ -1168,7 +1135,7 @@ func destroyPoolGo(poolName string) map[string]interface{} {
 		}
 	}
 
-	// ── 5. Zero mdadm superblock on ALL pool disks + their partitions ──
+	// ── 4. Zero mdadm superblock on ALL pool disks + their partitions ──
 	for _, disk := range poolDisks {
 		diskBase := filepath.Base(disk)
 		// Zero superblock on disk itself
@@ -1183,12 +1150,12 @@ func destroyPoolGo(poolName string) map[string]interface{} {
 		}
 	}
 
-	// ── 6. Remove mount point directory ──
+	// ── 5. Remove mount point directory ──
 	if mountPoint != "" && strings.HasPrefix(mountPoint, nimbusPoolsDir) {
 		os.RemoveAll(mountPoint)
 	}
 
-	// ── 7. Clean fstab — remove ALL entries for this pool ──
+	// ── 6. Clean fstab — remove ALL entries for this pool ──
 	if fstab, err := os.ReadFile("/etc/fstab"); err == nil {
 		var cleanLines []string
 		for _, line := range strings.Split(string(fstab), "\n") {
@@ -1212,13 +1179,13 @@ func destroyPoolGo(poolName string) map[string]interface{} {
 		os.WriteFile("/etc/fstab", []byte(strings.Join(cleanLines, "\n")), 0644)
 	}
 
-	// ── 8. Update mdadm.conf (regenerate from remaining active arrays) ──
+	// ── 7. Update mdadm.conf (regenerate from remaining active arrays) ──
 	if raidLevel != "single" && arrayName != "" {
 		run("mdadm --detail --scan > /etc/mdadm/mdadm.conf 2>/dev/null || true")
 		run("update-initramfs -u 2>/dev/null || true")
 	}
 
-	// ── 9. Remove from storage.json ──
+	// ── 8. Remove from storage.json ──
 	confPools = append(confPools[:poolIdx], confPools[poolIdx+1:]...)
 	conf["pools"] = confPools
 	if pp, _ := conf["primaryPool"].(string); pp == poolName {
@@ -1232,7 +1199,7 @@ func destroyPoolGo(poolName string) map[string]interface{} {
 	}
 	saveStorageConfigFull(conf)
 
-	// ── 10. Rescan disks so they appear as available again ──
+	// ── 9. Rescan disks so they appear as available again ──
 	for _, disk := range poolDisks {
 		run(fmt.Sprintf("partx -d %s 2>/dev/null || true", disk))
 		run(fmt.Sprintf("blockdev --rereadpt %s 2>/dev/null || true", disk))
@@ -1567,13 +1534,13 @@ func cleanOrphanMountPoints() {
 }
 
 // ═══════════════════════════════════
-// Unified Storage + Docker Startup
-// Runs once at daemon start — mounts all pools, fixes Docker config, creates shares
-// The user should NEVER need to touch the terminal for any of this
+// Storage Startup
+// Runs once at daemon start — mounts all pools and creates pool dirs
+// Docker is managed independently by its own app
 // ═══════════════════════════════════
 
-func startupStorageAndDocker() {
-	logMsg("startup: Beginning storage and Docker initialization...")
+func startupStorage() {
+	logMsg("startup: Beginning storage initialization...")
 
 	conf := getStorageConfigFull()
 	confPools, _ := conf["pools"].([]interface{})
@@ -1675,117 +1642,7 @@ func startupStorageAndDocker() {
 		createPoolDirs(mountPoint)
 	}
 
-	// ── 3. Fix Docker configuration ──
-	// Check if Docker binary exists AND we have a mounted pool
-	_, dockerBinaryExists := run("which docker 2>/dev/null")
-	dockerConf := getDockerConfigGo()
-	isInstalled, _ := dockerConf["installed"].(bool)
-	dockerPath, _ := dockerConf["path"].(string)
-
-	if dockerBinaryExists && mountedPools > 0 {
-		// Docker binary exists and pool is mounted — ensure it's configured and running
-
-		// Find docker path from config or derive from first mounted pool
-		if dockerPath == "" || !isInstalled {
-			// Derive from first mounted pool
-			if dp, err := getDockerPath(); err == nil {
-				dockerPath = dp
-				logMsg("startup: Docker path derived from pool: %s", dockerPath)
-			}
-		}
-
-		if dockerPath != "" {
-			logMsg("startup: Docker configured at %s", dockerPath)
-
-			// Verify docker path is on a mounted pool
-			mountSrc, _ := run(fmt.Sprintf("findmnt -n -o SOURCE %s 2>/dev/null", filepath.Dir(dockerPath)))
-			rootSrc, _ := run("findmnt -n -o SOURCE / 2>/dev/null")
-			poolMounted := strings.TrimSpace(mountSrc) != "" && strings.TrimSpace(mountSrc) != strings.TrimSpace(rootSrc)
-
-			if !poolMounted {
-				if dp, err := getDockerPath(); err == nil && dp != dockerPath {
-					logMsg("startup: Correcting Docker path from '%s' to '%s'", dockerPath, dp)
-					dockerPath = dp
-				}
-			}
-
-			dockerDataPath := filepath.Join(dockerPath, "data")
-
-			// Ensure daemon.json points to pool
-			os.MkdirAll("/etc/docker", 0755)
-			currentDaemon, _ := os.ReadFile("/etc/docker/daemon.json")
-			if !strings.Contains(string(currentDaemon), dockerDataPath) {
-				logMsg("startup: Setting Docker daemon.json → data-root=%s", dockerDataPath)
-				daemonConf := map[string]interface{}{"data-root": dockerDataPath}
-				data, _ := json.MarshalIndent(daemonConf, "", "  ")
-				os.WriteFile("/etc/docker/daemon.json", data, 0644)
-			}
-
-			// Ensure directories exist
-			os.MkdirAll(filepath.Join(dockerPath, "data"), 0755)
-			os.MkdirAll(filepath.Join(dockerPath, "containers"), 0755)
-			os.MkdirAll(filepath.Join(dockerPath, "stacks"), 0755)
-			os.MkdirAll(filepath.Join(dockerPath, "volumes"), 0755)
-
-			// Update docker.json
-			dockerConf["installed"] = true
-			dockerConf["path"] = dockerPath
-			dockerConf["dockerAvailable"] = true
-			saveDockerConfigGo(dockerConf)
-
-			// Ensure docker-apps share exists
-			existingShare, _ := dbSharesGet("docker-apps")
-			if existingShare == nil {
-				dockerSharePath := filepath.Join(dockerPath, "containers")
-				poolName := ""
-				for _, poolRaw := range confPools {
-					pm, _ := poolRaw.(map[string]interface{})
-					mp, _ := pm["mountPoint"].(string)
-					if mp != "" && strings.HasPrefix(dockerPath, mp) {
-						poolName, _ = pm["name"].(string)
-						break
-					}
-				}
-
-				shareGroup := "nimos-share-docker-apps"
-				run(fmt.Sprintf("groupadd -f %s", shareGroup))
-				run(fmt.Sprintf(`chown root:%s "%s"`, shareGroup, dockerSharePath))
-				run(fmt.Sprintf(`chmod 2775 "%s"`, dockerSharePath))
-				run(fmt.Sprintf(`setfacl -d -m g:%s:rwx "%s" 2>/dev/null || true`, shareGroup, dockerSharePath))
-				run(fmt.Sprintf("usermod -aG %s nimbus 2>/dev/null || true", shareGroup))
-				run(fmt.Sprintf("usermod -aG %s nimos 2>/dev/null || true", shareGroup))
-
-				dbSharesCreate("docker-apps", "Docker Apps", "Application data for Docker containers", dockerSharePath, poolName, poolName, "system")
-
-				if users, err := dbUsersList(); err == nil {
-					for _, u := range users {
-						role, _ := u["role"].(string)
-						username, _ := u["username"].(string)
-						if role == "admin" && username != "" {
-							dbShareSetPermission("docker-apps", username, "rw")
-							run(fmt.Sprintf("usermod -aG docker %s 2>/dev/null || true", username))
-							run(fmt.Sprintf("usermod -aG %s %s 2>/dev/null || true", shareGroup, username))
-						}
-					}
-				}
-				logMsg("startup: Docker share 'docker-apps' created")
-			}
-
-			// Enable and start Docker
-			run("systemctl enable docker.service docker.socket 2>/dev/null || true")
-			if _, dockerRunning := run("docker info 2>/dev/null"); !dockerRunning {
-				logMsg("startup: Docker not running — starting...")
-				run("systemctl start docker 2>/dev/null || true")
-			}
-			logMsg("startup: Docker is running on pool")
-		}
-	} else if !dockerBinaryExists {
-		logMsg("startup: Docker not installed — skipping")
-	} else if mountedPools == 0 {
-		logMsg("startup: No pools mounted — Docker disabled")
-	}
-
-	logMsg("startup: Storage and Docker initialization complete")
+	logMsg("startup: Storage initialization complete")
 }
 
 // ═══════════════════════════════════

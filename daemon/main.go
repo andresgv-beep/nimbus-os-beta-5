@@ -625,7 +625,7 @@ func main() {
 	// FIRST: Mount all pools before anything else touches storage
 	zfsAutoImportOnStartup()
 	btrfsAutoMountOnStartup()
-	startupStorageAndDocker()
+	startupStorage()
 
 	// THEN: Start monitoring (cleanOrphanMountPoints runs here, AFTER pools are mounted)
 	startStorageMonitoring()
