@@ -630,6 +630,9 @@ func main() {
 	// Btrfs: auto-mount pools
 	btrfsAutoMountOnStartup()
 
+	// Unified storage + Docker startup — mount everything, fix Docker config
+	startupStorageAndDocker()
+
 	// Clean up stale socket
 	os.Remove(socketPath)
 

@@ -1516,6 +1516,217 @@ func startStorageMonitoring() {
 }
 
 func cleanOrphanMountPoints() {
+
+// ═══════════════════════════════════
+// Unified Storage + Docker Startup
+// Runs once at daemon start — mounts all pools, fixes Docker config, creates shares
+// The user should NEVER need to touch the terminal for any of this
+// ═══════════════════════════════════
+
+func startupStorageAndDocker() {
+	logMsg("startup: Beginning storage and Docker initialization...")
+
+	conf := getStorageConfigFull()
+	confPools, _ := conf["pools"].([]interface{})
+	if len(confPools) == 0 {
+		logMsg("startup: No pools configured — nothing to do")
+		return
+	}
+
+	// ── 1. Verify all pools are mounted ──
+	mountedPools := 0
+	for _, poolRaw := range confPools {
+		pm, _ := poolRaw.(map[string]interface{})
+		if pm == nil {
+			continue
+		}
+		poolName, _ := pm["name"].(string)
+		poolType, _ := pm["type"].(string)
+		mountPoint, _ := pm["mountPoint"].(string)
+
+		if mountPoint == "" {
+			logMsg("startup: Pool '%s' has no mount point — skipping", poolName)
+			continue
+		}
+
+		// Check if already mounted
+		mountSrc, _ := run(fmt.Sprintf("findmnt -n -o SOURCE %s 2>/dev/null", mountPoint))
+		if strings.TrimSpace(mountSrc) != "" {
+			rootSrc, _ := run("findmnt -n -o SOURCE / 2>/dev/null")
+			if strings.TrimSpace(mountSrc) != strings.TrimSpace(rootSrc) {
+				logMsg("startup: Pool '%s' (%s) already mounted at %s", poolName, poolType, mountPoint)
+				mountedPools++
+				continue
+			}
+		}
+
+		// Not mounted — try to mount based on type
+		logMsg("startup: Pool '%s' (%s) not mounted — attempting mount...", poolName, poolType)
+		os.MkdirAll(mountPoint, 0755)
+
+		mounted := false
+		switch poolType {
+		case "zfs":
+			zpoolName, _ := pm["zpoolName"].(string)
+			if zpoolName != "" {
+				// Import if needed
+				if out, _ := run(fmt.Sprintf("zpool list -H -o name %s 2>/dev/null", zpoolName)); strings.TrimSpace(out) == "" {
+					run(fmt.Sprintf("zpool import -f %s 2>/dev/null || true", zpoolName))
+				}
+				// Set mountpoint and mount
+				run(fmt.Sprintf("zfs set mountpoint=%s %s 2>/dev/null", mountPoint, zpoolName))
+				run(fmt.Sprintf("zfs mount %s 2>/dev/null || true", zpoolName))
+				// Verify
+				if out, _ := run(fmt.Sprintf("findmnt -n -o SOURCE %s 2>/dev/null", mountPoint)); strings.TrimSpace(out) != "" {
+					mounted = true
+				}
+			}
+
+		case "btrfs":
+			// Try mount from fstab first
+			run(fmt.Sprintf("mount %s 2>/dev/null || true", mountPoint))
+			if out, _ := run(fmt.Sprintf("findmnt -n -o SOURCE %s 2>/dev/null", mountPoint)); strings.TrimSpace(out) != "" {
+				mounted = true
+			} else {
+				// Try mounting from disk directly using label
+				label := "nimbus-" + poolName
+				run(fmt.Sprintf("mount -t btrfs -o defaults,noatime,compress=zstd:3 LABEL=%s %s 2>/dev/null || true", label, mountPoint))
+				if out2, _ := run(fmt.Sprintf("findmnt -n -o SOURCE %s 2>/dev/null", mountPoint)); strings.TrimSpace(out2) != "" {
+					mounted = true
+				}
+			}
+
+		default:
+			// mdadm / ext4 — try fstab
+			run(fmt.Sprintf("mount %s 2>/dev/null || true", mountPoint))
+			if out, _ := run(fmt.Sprintf("findmnt -n -o SOURCE %s 2>/dev/null", mountPoint)); strings.TrimSpace(out) != "" {
+				mounted = true
+			}
+		}
+
+		if mounted {
+			logMsg("startup: Pool '%s' mounted successfully", poolName)
+			mountedPools++
+		} else {
+			logMsg("startup: WARNING — Pool '%s' could not be mounted!", poolName)
+		}
+	}
+
+	logMsg("startup: %d/%d pools mounted", mountedPools, len(confPools))
+
+	// ── 2. Create pool directories if missing ──
+	for _, poolRaw := range confPools {
+		pm, _ := poolRaw.(map[string]interface{})
+		if pm == nil {
+			continue
+		}
+		mountPoint, _ := pm["mountPoint"].(string)
+		if mountPoint == "" {
+			continue
+		}
+		// Only create dirs if the pool is actually mounted
+		if !isPathOnMountedPool(filepath.Join(mountPoint, "test-check")) {
+			// Check with findmnt directly
+			mountSrc, _ := run(fmt.Sprintf("findmnt -n -o SOURCE %s 2>/dev/null", mountPoint))
+			rootSrc, _ := run("findmnt -n -o SOURCE / 2>/dev/null")
+			if strings.TrimSpace(mountSrc) == "" || strings.TrimSpace(mountSrc) == strings.TrimSpace(rootSrc) {
+				continue // not mounted, skip
+			}
+		}
+		createPoolDirs(mountPoint)
+	}
+
+	// ── 3. Fix Docker configuration ──
+	dockerConf := getDockerConfigGo()
+	isInstalled, _ := dockerConf["installed"].(bool)
+	dockerPath, _ := dockerConf["path"].(string)
+
+	if isInstalled && dockerPath != "" {
+		logMsg("startup: Docker configured at %s", dockerPath)
+
+		// Verify the docker path is on a mounted pool
+		mountSrc, _ := run(fmt.Sprintf("findmnt -n -o SOURCE %s 2>/dev/null", filepath.Dir(dockerPath)))
+		rootSrc, _ := run("findmnt -n -o SOURCE / 2>/dev/null")
+		poolMounted := strings.TrimSpace(mountSrc) != "" && strings.TrimSpace(mountSrc) != strings.TrimSpace(rootSrc)
+
+		if !poolMounted {
+			// Docker path's pool is not mounted — try to find the right pool
+			logMsg("startup: Docker path '%s' not on mounted pool — searching...", dockerPath)
+			if dp, err := getDockerPath(); err == nil && dp != dockerPath {
+				logMsg("startup: Correcting Docker path from '%s' to '%s'", dockerPath, dp)
+				dockerPath = dp
+				dockerConf["path"] = dp
+				saveDockerConfigGo(dockerConf)
+			}
+		}
+
+		// Ensure Docker data-root matches
+		dockerDataPath := filepath.Join(dockerPath, "data")
+		expectedDaemonConf := fmt.Sprintf(`{"data-root":"%s"}`, dockerDataPath)
+
+		currentDaemon, _ := os.ReadFile("/etc/docker/daemon.json")
+		if !strings.Contains(string(currentDaemon), dockerDataPath) {
+			logMsg("startup: Fixing Docker daemon.json — data-root → %s", dockerDataPath)
+			os.MkdirAll("/etc/docker", 0755)
+			daemonConf := map[string]interface{}{"data-root": dockerDataPath}
+			data, _ := json.MarshalIndent(daemonConf, "", "  ")
+			os.WriteFile("/etc/docker/daemon.json", data, 0644)
+			run("systemctl restart docker 2>/dev/null || true")
+		} else {
+			_ = expectedDaemonConf // suppress unused
+		}
+
+		// Ensure Docker directories exist
+		os.MkdirAll(filepath.Join(dockerPath, "data"), 0755)
+		os.MkdirAll(filepath.Join(dockerPath, "containers"), 0755)
+		os.MkdirAll(filepath.Join(dockerPath, "stacks"), 0755)
+		os.MkdirAll(filepath.Join(dockerPath, "volumes"), 0755)
+
+		// Ensure docker-apps share exists
+		existingShare, _ := dbSharesGet("docker-apps")
+		if existingShare == nil {
+			dockerSharePath := filepath.Join(dockerPath, "containers")
+			// Find pool name
+			poolName := ""
+			for _, poolRaw := range confPools {
+				pm, _ := poolRaw.(map[string]interface{})
+				mp, _ := pm["mountPoint"].(string)
+				if mp != "" && strings.HasPrefix(dockerPath, mp) {
+					poolName, _ = pm["name"].(string)
+					break
+				}
+			}
+
+			shareGroup := "nimos-share-docker-apps"
+			run(fmt.Sprintf("groupadd -f %s", shareGroup))
+			run(fmt.Sprintf(`chown root:%s "%s"`, shareGroup, dockerSharePath))
+			run(fmt.Sprintf(`chmod 2775 "%s"`, dockerSharePath))
+			run(fmt.Sprintf(`setfacl -d -m g:%s:rwx "%s" 2>/dev/null || true`, shareGroup, dockerSharePath))
+			run(fmt.Sprintf("usermod -aG %s nimbus 2>/dev/null || true", shareGroup))
+			run(fmt.Sprintf("usermod -aG %s nimos 2>/dev/null || true", shareGroup))
+
+			dbSharesCreate("docker-apps", "Docker Apps", "Application data for Docker containers", dockerSharePath, poolName, poolName, "system")
+
+			if users, err := dbUsersList(); err == nil {
+				for _, u := range users {
+					role, _ := u["role"].(string)
+					username, _ := u["username"].(string)
+					if role == "admin" && username != "" {
+						dbShareSetPermission("docker-apps", username, "rw")
+						run(fmt.Sprintf("usermod -aG docker %s 2>/dev/null || true", username))
+						run(fmt.Sprintf("usermod -aG %s %s 2>/dev/null || true", shareGroup, username))
+					}
+				}
+			}
+			logMsg("startup: Docker share 'docker-apps' created")
+		}
+
+		logMsg("startup: Docker configuration verified")
+	}
+
+	logMsg("startup: Storage and Docker initialization complete")
+}
+
 	conf := getStorageConfigFull()
 	confPools, _ := conf["pools"].([]interface{})
 
