@@ -701,9 +701,22 @@ func dockerInstall(w http.ResponseWriter, r *http.Request) {
 
 	dockerPath := filepath.Join(mountPoint, "docker")
 
-	os.MkdirAll(filepath.Join(dockerPath, "containers"), 0755)
-	os.MkdirAll(filepath.Join(dockerPath, "volumes"), 0755)
-	os.MkdirAll(filepath.Join(dockerPath, "stacks"), 0755)
+	// Verify we're writing to the pool, not the system disk
+	mountSrc, _ := run(fmt.Sprintf("findmnt -n -o SOURCE %s 2>/dev/null", mountPoint))
+	rootSrc, _ := run("findmnt -n -o SOURCE / 2>/dev/null")
+	if strings.TrimSpace(mountSrc) == "" || strings.TrimSpace(mountSrc) == strings.TrimSpace(rootSrc) {
+		jsonError(w, 400, "Pool is not mounted — cannot install Docker. Try refreshing Storage Manager.")
+		return
+	}
+
+	// Create ALL Docker directories on the pool
+	for _, dir := range []string{"data", "containers", "stacks", "volumes"} {
+		p := filepath.Join(dockerPath, dir)
+		if err := os.MkdirAll(p, 0755); err != nil {
+			log.Printf("Warning: could not create %s: %v", p, err)
+		}
+	}
+	log.Printf("Docker directories created at %s", dockerPath)
 
 	dockerAvailable := isDockerInstalledGo()
 	if !dockerAvailable {
