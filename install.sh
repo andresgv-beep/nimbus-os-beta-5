@@ -503,10 +503,29 @@ setup_nginx() {
   systemctl stop apache2 2>/dev/null || true
   systemctl disable apache2 2>/dev/null || true
 
+  # Hide nginx version globally
+  sed -i '/http {/a \\tserver_tokens off;' /etc/nginx/nginx.conf 2>/dev/null || true
+
   cat > /etc/nginx/sites-available/nimbusos << EOF
 server {
     listen 80 default_server;
     server_name _;
+
+    # ── Block hidden files (.env, .git, .htaccess, etc.) ──
+    location ~ /\\. {
+        deny all;
+        return 404;
+    }
+
+    # ── Block sensitive paths ──
+    location = /server-status { deny all; return 404; }
+    location = /server-info   { deny all; return 404; }
+
+    # ── Security headers (Nginx layer — extra on top of daemon) ──
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()" always;
+
+    # ── Proxy to NimOS daemon ──
     location / {
         proxy_pass http://127.0.0.1:$NIMBUS_PORT;
         proxy_http_version 1.1;
@@ -514,9 +533,11 @@ server {
         proxy_set_header Connection "upgrade";
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
         proxy_read_timeout 120s;
         proxy_send_timeout 120s;
-        client_max_body_size 500M;
+        client_max_body_size 10G;
     }
 }
 EOF
@@ -526,7 +547,7 @@ EOF
   nginx -t 2>/dev/null && systemctl restart nginx
   systemctl enable nginx
 
-  ok "Nginx configured as reverse proxy"
+  ok "Nginx configured (hardened — hidden files blocked)"
 }
 
 # ── Configure Avahi ──
