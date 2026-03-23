@@ -330,6 +330,21 @@ func destroyPoolBtrfs(poolName string) map[string]interface{} {
 		run(fmt.Sprintf("umount -f %s 2>/dev/null || true", mountPoint))
 	}
 
+	// Kill processes on disks and force unmount
+	for _, disk := range poolDisks {
+		run(fmt.Sprintf("fuser -km %s 2>/dev/null || true", disk))
+	}
+
+	// Wait and verify unmount completed
+	time.Sleep(2 * time.Second)
+	if mountPoint != "" {
+		if out, _ := run(fmt.Sprintf("findmnt -n -o SOURCE %s 2>/dev/null", mountPoint)); strings.TrimSpace(out) != "" {
+			// Still mounted — force harder
+			run(fmt.Sprintf("umount -f %s 2>/dev/null || true", mountPoint))
+			time.Sleep(1 * time.Second)
+		}
+	}
+
 	// ── 4. Wipe filesystem signatures ──
 	for _, disk := range poolDisks {
 		run(fmt.Sprintf("wipefs -af %s 2>/dev/null || true", disk))
