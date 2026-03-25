@@ -27,6 +27,7 @@ var (
 	hasNvidia   bool
 	hasAmdDrm   bool
 	hasZfs      bool
+	hasMdadm    bool
 	systemArch  string
 	systemRamGB int
 )
@@ -39,6 +40,7 @@ func detectHardwareTools() {
 	hasAmdDrm = detectAmdDrm()
 
 	// Storage backends
+	_, hasMdadm = run("which mdadm 2>/dev/null")
 	if zpoolOut, ok := run("which zpool 2>/dev/null"); ok && zpoolOut != "" {
 		// Verify ZFS module is loaded
 		if _, modOk := run("lsmod 2>/dev/null | grep -q '^zfs '"); modOk {
@@ -62,10 +64,8 @@ func detectHardwareTools() {
 
 	if hasZfs {
 		logMsg("ZFS available (arch=%s, ram=%dGB)", systemArch, systemRamGB)
-	} else if hasBtrfs {
-		logMsg("Btrfs available, ZFS not available (arch=%s, ram=%dGB)", systemArch, systemRamGB)
 	} else {
-		logMsg("WARNING: No supported storage backend (arch=%s, ram=%dGB) — install zfsutils-linux or btrfs-progs", systemArch, systemRamGB)
+		logMsg("ZFS not available — mdadm only (arch=%s, ram=%dGB)", systemArch, systemRamGB)
 	}
 }
 
