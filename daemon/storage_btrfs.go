@@ -222,7 +222,6 @@ func createPoolBtrfs(body map[string]interface{}) map[string]interface{} {
 	// ── Create subvolumes ──
 	// Btrfs subvolumes are like ZFS datasets — lightweight, can be snapshotted individually
 	run(fmt.Sprintf("btrfs subvolume create %s/shares 2>/dev/null || true", mountPoint))
-	run(fmt.Sprintf("btrfs subvolume create %s/docker 2>/dev/null || true", mountPoint))
 	run(fmt.Sprintf("btrfs subvolume create %s/system-backup 2>/dev/null || true", mountPoint))
 
 	// ── Create standard dirs ──
@@ -314,25 +313,7 @@ func destroyPoolBtrfs(poolName string) map[string]interface{} {
 		}
 	}
 
-	// ── 2. Clean Docker if on this pool ──
-	dockerConf := getDockerConfigGo()
-	dockerPath, _ := dockerConf["path"].(string)
-	if dockerPath != "" && mountPoint != "" && strings.HasPrefix(dockerPath, mountPoint) {
-		run("docker stop $(docker ps -aq) 2>/dev/null || true")
-		run("docker rm $(docker ps -aq) 2>/dev/null || true")
-		run("systemctl stop docker.socket docker containerd 2>/dev/null || true")
-		run("systemctl disable docker.socket docker.service containerd.service 2>/dev/null || true")
-		run("rm -rf /var/lib/docker 2>/dev/null || true")
-		run("rm -f /etc/docker/daemon.json 2>/dev/null || true")
-		saveDockerConfigGo(map[string]interface{}{
-			"installed": false, "path": nil, "permissions": []interface{}{},
-			"appPermissions": map[string]interface{}{},
-		})
-		saveInstalledApps([]map[string]interface{}{})
-		run("groupdel nimos-share-docker-apps 2>/dev/null || true")
-	}
-
-	// ── 3. Kill processes and unmount ──
+	// ── 2. Kill processes and unmount ──
 	if mountPoint != "" {
 		// Kill all processes using the mount point
 		run(fmt.Sprintf("fuser -mk %s 2>/dev/null || true", mountPoint))
@@ -374,7 +355,7 @@ func destroyPoolBtrfs(poolName string) map[string]interface{} {
 		}
 	}
 
-	// ── 4. Wipe filesystem signatures ──
+	// ── 3. Wipe filesystem signatures ──
 	for _, disk := range poolDisks {
 		// Force kernel to forget the device
 		run(fmt.Sprintf("blkdiscard -f %s 2>/dev/null || true", disk))
@@ -385,12 +366,12 @@ func destroyPoolBtrfs(poolName string) map[string]interface{} {
 	run("partprobe 2>/dev/null || true")
 	run("udevadm settle --timeout=5 2>/dev/null || true")
 
-	// ── 5. Remove mount point ──
+	// ── 4. Remove mount point ──
 	if mountPoint != "" && strings.HasPrefix(mountPoint, nimbusPoolsDir) {
 		os.RemoveAll(mountPoint)
 	}
 
-	// ── 6. Clean fstab ──
+	// ── 5. Clean fstab ──
 	if fstab, err := os.ReadFile("/etc/fstab"); err == nil {
 		var cleanLines []string
 		for _, line := range strings.Split(string(fstab), "\n") {
@@ -405,7 +386,7 @@ func destroyPoolBtrfs(poolName string) map[string]interface{} {
 		os.WriteFile("/etc/fstab", []byte(strings.Join(cleanLines, "\n")), 0644)
 	}
 
-	// ── 7. Remove from storage.json ──
+	// ── 6. Remove from storage.json ──
 	confPools = append(confPools[:poolIdx], confPools[poolIdx+1:]...)
 	conf["pools"] = confPools
 	if pp, _ := conf["primaryPool"].(string); pp == poolName {
@@ -419,7 +400,7 @@ func destroyPoolBtrfs(poolName string) map[string]interface{} {
 	}
 	saveStorageConfigFull(conf)
 
-	// ── 8. Rescan ──
+	// ── 7. Rescan ──
 	for _, disk := range poolDisks {
 		run(fmt.Sprintf("partx -d %s 2>/dev/null || true", disk))
 		run(fmt.Sprintf("blockdev --rereadpt %s 2>/dev/null || true", disk))
