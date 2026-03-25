@@ -1,0 +1,44 @@
+[Unit]
+Description=NimOS Daemon
+Documentation=https://github.com/andresgv-beep/NimOs-beta-5
+
+# Arrancar después de que los filesystems del sistema estén listos
+# y después de que ZFS haya intentado sus mounts nativos
+After=local-fs.target zfs-mount.service zfs-import.target
+
+# nimbusos.service (el frontend Node.js) arranca después de nosotros
+Before=nimbusos.service
+
+# Docker NO es dependencia nuestra — el usuario lo arranca manualmente
+# desde la app cuando quiera, después de que los pools estén montados.
+
+[Service]
+# Type=notify: systemd espera nuestra señal "ready" antes de
+# arrancar nimbusos.service. La señal la mandamos con systemd-notify
+# al final del startup, cuando los pools ya están montados.
+Type=notify
+NotifyAccess=main
+
+User=root
+Group=root
+ExecStart=/opt/nimbusos/daemon/nimos-daemon
+Restart=always
+RestartSec=3
+
+# Tiempo máximo para montar pools grandes antes de que systemd
+# considere el startup fallido
+TimeoutStartSec=120
+
+# Security
+PrivateNetwork=false
+ProtectHome=false
+ProtectSystem=false
+ReadWritePaths=/run /nimbus /var/lib /etc /home /tmp /var/tmp /var/log /var/cache /opt/nimbusos /usr/local/bin /usr/bin /usr/sbin /usr/lib /usr/share /var/run
+NoNewPrivileges=false
+
+# Logging
+StandardOutput=append:/var/log/nimbusos/daemon.log
+StandardError=append:/var/log/nimbusos/daemon-error.log
+
+[Install]
+WantedBy=multi-user.target
