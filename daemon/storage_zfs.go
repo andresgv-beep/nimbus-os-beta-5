@@ -131,7 +131,13 @@ func createPoolZfs(body map[string]interface{}) map[string]interface{} {
 
 	// Create standard datasets
 	run(fmt.Sprintf("zfs create %s/shares 2>/dev/null", zpoolName))
+	run(fmt.Sprintf("zfs create %s/docker 2>/dev/null", zpoolName))
 	run(fmt.Sprintf("zfs create %s/system-backup 2>/dev/null", zpoolName))
+
+	// Create pool dirs (for compatibility)
+	os.MkdirAll(filepath.Join(mountPoint, "docker", "containers"), 0755)
+	os.MkdirAll(filepath.Join(mountPoint, "docker", "stacks"), 0755)
+	os.MkdirAll(filepath.Join(mountPoint, "docker", "volumes"), 0755)
 
 	// Write identity file
 	writePoolIdentityZfs(mountPoint, name, vdevType, disks)
@@ -208,29 +214,42 @@ func destroyPoolZfs(poolName string) map[string]interface{} {
 		}
 	}
 
-	// ── 2. Unmount any overlay/bind mounts on the pool ──
+	// ── 2. Stop Docker if on this pool ──
+	dockerConf := getDockerConfigGo()
+	dockerPath, _ := dockerConf["path"].(string)
+	if dockerPath != "" && mountPoint != "" && strings.HasPrefix(dockerPath, mountPoint) {
+		run("docker stop $(docker ps -aq) 2>/dev/null || true")
+		run("docker rm $(docker ps -aq) 2>/dev/null || true")
+		run("systemctl stop docker.socket docker containerd 2>/dev/null || true")
+		run("systemctl disable docker.socket docker.service containerd.service 2>/dev/null || true")
+		run("rm -rf /var/lib/docker 2>/dev/null || true")
+		run("rm -f /etc/docker/daemon.json 2>/dev/null || true")
+		saveDockerConfigGo(map[string]interface{}{
+			"installed": false, "path": nil, "permissions": []interface{}{},
+			"appPermissions": map[string]interface{}{},
+		})
+		saveInstalledApps([]map[string]interface{}{})
+		run("groupdel nimos-share-docker-apps 2>/dev/null || true")
+		logMsg("Docker stopped and config cleaned (was on pool '%s')", poolName)
+	}
+
+	// ── 3. Unmount any overlay/bind mounts on the pool ──
 	if mountPoint != "" {
-		// Stop SMB/NFS shares for this pool gracefully
-		run("systemctl reload smbd 2>/dev/null || true")
-		run("exportfs -ra 2>/dev/null || true")
-		time.Sleep(500 * time.Millisecond)
-
-		// Signal processes with TERM (not KILL) — prevents killing the daemon/network
-		run(fmt.Sprintf("fuser -k -TERM %s 2>/dev/null || true", mountPoint))
-		time.Sleep(1 * time.Second)
-
-		// Unmount all submounts (overlay, bind, etc.) in reverse order
+		// Kill any processes using the pool
+		run(fmt.Sprintf("fuser -km %s 2>/dev/null || true", mountPoint))
+		// Unmount all submounts (overlay, bind, etc.)
 		mountsOut, _ := run(fmt.Sprintf("findmnt -rn -o TARGET %s 2>/dev/null", mountPoint))
+		// Reverse order to unmount children first
 		mounts := strings.Split(strings.TrimSpace(mountsOut), "\n")
 		for i := len(mounts) - 1; i >= 0; i-- {
 			m := strings.TrimSpace(mounts[i])
 			if m != "" && m != mountPoint {
-				run(fmt.Sprintf("umount %s 2>/dev/null || true", m))
+				run(fmt.Sprintf("umount -l %s 2>/dev/null || true", m))
 			}
 		}
 	}
 
-	// ── 3. Destroy the zpool ──
+	// ── 4. Destroy the zpool ──
 	out, ok := run(fmt.Sprintf("zpool destroy -f %s 2>&1", zpoolName))
 	if !ok {
 		// One more try after a short wait
@@ -241,12 +260,12 @@ func destroyPoolZfs(poolName string) map[string]interface{} {
 		}
 	}
 
-	// ── 4. Remove mount point directory ──
+	// ── 5. Remove mount point directory ──
 	if mountPoint != "" && strings.HasPrefix(mountPoint, nimbusPoolsDir) {
 		os.RemoveAll(mountPoint)
 	}
 
-	// ── 5. Remove from storage.json ──
+	// ── 6. Remove from storage.json ──
 	confPools = append(confPools[:poolIdx], confPools[poolIdx+1:]...)
 	conf["pools"] = confPools
 	if primary, _ := conf["primaryPool"].(string); primary == poolName {
@@ -261,7 +280,7 @@ func destroyPoolZfs(poolName string) map[string]interface{} {
 	}
 	saveStorageConfigFull(conf)
 
-	// ── 6. Rescan disks ──
+	// ── 7. Rescan disks ──
 	run("partprobe 2>/dev/null || true")
 	rescanSCSIBuses()
 

@@ -222,6 +222,7 @@ func createPoolBtrfs(body map[string]interface{}) map[string]interface{} {
 	// ── Create subvolumes ──
 	// Btrfs subvolumes are like ZFS datasets — lightweight, can be snapshotted individually
 	run(fmt.Sprintf("btrfs subvolume create %s/shares 2>/dev/null || true", mountPoint))
+	run(fmt.Sprintf("btrfs subvolume create %s/docker 2>/dev/null || true", mountPoint))
 	run(fmt.Sprintf("btrfs subvolume create %s/system-backup 2>/dev/null || true", mountPoint))
 
 	// ── Create standard dirs ──
@@ -313,23 +314,29 @@ func destroyPoolBtrfs(poolName string) map[string]interface{} {
 		}
 	}
 
-	// ── 2. Stop services using the mount and unmount ──
+	// ── 2. Clean Docker if on this pool ──
+	dockerConf := getDockerConfigGo()
+	dockerPath, _ := dockerConf["path"].(string)
+	if dockerPath != "" && mountPoint != "" && strings.HasPrefix(dockerPath, mountPoint) {
+		run("docker stop $(docker ps -aq) 2>/dev/null || true")
+		run("docker rm $(docker ps -aq) 2>/dev/null || true")
+		run("systemctl stop docker.socket docker containerd 2>/dev/null || true")
+		run("systemctl disable docker.socket docker.service containerd.service 2>/dev/null || true")
+		run("rm -rf /var/lib/docker 2>/dev/null || true")
+		run("rm -f /etc/docker/daemon.json 2>/dev/null || true")
+		saveDockerConfigGo(map[string]interface{}{
+			"installed": false, "path": nil, "permissions": []interface{}{},
+			"appPermissions": map[string]interface{}{},
+		})
+		saveInstalledApps([]map[string]interface{}{})
+		run("groupdel nimos-share-docker-apps 2>/dev/null || true")
+	}
+
+	// ── 3. Kill processes and unmount ──
 	if mountPoint != "" {
-		// Stop SMB/NFS shares for this pool gracefully
-		run("systemctl reload smbd 2>/dev/null || true")
-		run("exportfs -ra 2>/dev/null || true")
+		// Kill all processes using the mount point
+		run(fmt.Sprintf("fuser -mk %s 2>/dev/null || true", mountPoint))
 		time.Sleep(500 * time.Millisecond)
-
-		// List processes using the mount point, but exclude our own daemon PID
-		daemonPid := os.Getpid()
-		fuserOut, _ := run(fmt.Sprintf("fuser -v %s 2>&1 || true", mountPoint))
-		if fuserOut != "" {
-			logMsg("destroyPool: processes using %s: %s", mountPoint, fuserOut)
-		}
-
-		// Send SIGTERM (not SIGKILL) to user processes only, excluding our PID
-		run(fmt.Sprintf("fuser -k -TERM %s 2>/dev/null || true", mountPoint))
-		time.Sleep(1 * time.Second)
 
 		// Unmount all submounts first (overlay, bind, etc.) in reverse order
 		mountsOut, _ := run(fmt.Sprintf("findmnt -rn -o TARGET %s 2>/dev/null", mountPoint))
@@ -337,6 +344,7 @@ func destroyPoolBtrfs(poolName string) map[string]interface{} {
 		for i := len(mounts) - 1; i >= 0; i-- {
 			m := strings.TrimSpace(mounts[i])
 			if m != "" && m != mountPoint {
+				run(fmt.Sprintf("fuser -mk %s 2>/dev/null || true", m))
 				run(fmt.Sprintf("umount %s 2>/dev/null || true", m))
 			}
 		}
@@ -344,16 +352,14 @@ func destroyPoolBtrfs(poolName string) map[string]interface{} {
 		// Try normal unmount first
 		umountOut, _ := run(fmt.Sprintf("umount %s 2>&1", mountPoint))
 		if strings.Contains(umountOut, "busy") || strings.Contains(umountOut, "target is busy") {
-			// Only use lazy unmount as last resort — never fuser -mk (SIGKILL)
-			logMsg("destroyPool: mount busy, using lazy unmount for %s", mountPoint)
-			run(fmt.Sprintf("umount -l %s 2>/dev/null || true", mountPoint))
+			// Force + lazy only if normal fails
+			run(fmt.Sprintf("umount -f -l %s 2>/dev/null || true", mountPoint))
 		}
-		_ = daemonPid // Used conceptually — we send TERM not KILL so daemon survives
 	}
 
-	// Signal processes on individual disks (TERM, not KILL)
+	// Kill processes on individual disks
 	for _, disk := range poolDisks {
-		run(fmt.Sprintf("fuser -k -TERM %s 2>/dev/null || true", disk))
+		run(fmt.Sprintf("fuser -mk %s 2>/dev/null || true", disk))
 	}
 
 	// Wait for kernel to release
@@ -362,14 +368,13 @@ func destroyPoolBtrfs(poolName string) map[string]interface{} {
 	// Verify unmount completed
 	if mountPoint != "" {
 		if out, _ := run(fmt.Sprintf("findmnt -n -o SOURCE %s 2>/dev/null", mountPoint)); strings.TrimSpace(out) != "" {
-			// Last resort — lazy unmount, still no SIGKILL
-			logMsg("destroyPool: mount still active after TERM, using lazy unmount")
-			run(fmt.Sprintf("umount -l %s 2>/dev/null || true", mountPoint))
+			run(fmt.Sprintf("fuser -mk %s 2>/dev/null || true", mountPoint))
+			run(fmt.Sprintf("umount -f -l %s 2>/dev/null || true", mountPoint))
 			time.Sleep(1 * time.Second)
 		}
 	}
 
-	// ── 3. Wipe filesystem signatures ──
+	// ── 4. Wipe filesystem signatures ──
 	for _, disk := range poolDisks {
 		// Force kernel to forget the device
 		run(fmt.Sprintf("blkdiscard -f %s 2>/dev/null || true", disk))
@@ -380,12 +385,12 @@ func destroyPoolBtrfs(poolName string) map[string]interface{} {
 	run("partprobe 2>/dev/null || true")
 	run("udevadm settle --timeout=5 2>/dev/null || true")
 
-	// ── 4. Remove mount point ──
+	// ── 5. Remove mount point ──
 	if mountPoint != "" && strings.HasPrefix(mountPoint, nimbusPoolsDir) {
 		os.RemoveAll(mountPoint)
 	}
 
-	// ── 5. Clean fstab ──
+	// ── 6. Clean fstab ──
 	if fstab, err := os.ReadFile("/etc/fstab"); err == nil {
 		var cleanLines []string
 		for _, line := range strings.Split(string(fstab), "\n") {
@@ -400,7 +405,7 @@ func destroyPoolBtrfs(poolName string) map[string]interface{} {
 		os.WriteFile("/etc/fstab", []byte(strings.Join(cleanLines, "\n")), 0644)
 	}
 
-	// ── 6. Remove from storage.json ──
+	// ── 7. Remove from storage.json ──
 	confPools = append(confPools[:poolIdx], confPools[poolIdx+1:]...)
 	conf["pools"] = confPools
 	if pp, _ := conf["primaryPool"].(string); pp == poolName {
@@ -414,7 +419,7 @@ func destroyPoolBtrfs(poolName string) map[string]interface{} {
 	}
 	saveStorageConfigFull(conf)
 
-	// ── 7. Rescan ──
+	// ── 8. Rescan ──
 	for _, disk := range poolDisks {
 		run(fmt.Sprintf("partx -d %s 2>/dev/null || true", disk))
 		run(fmt.Sprintf("blockdev --rereadpt %s 2>/dev/null || true", disk))
