@@ -208,23 +208,47 @@ func destroyPoolZfs(poolName string) map[string]interface{} {
 		}
 	}
 
-	// ── 2. Unmount any overlay/bind mounts on the pool ──
+	// ── 2. Kill processes and unmount everything on the pool ──
 	if mountPoint != "" {
-		// Kill any processes using the pool
+		// Kill any processes using any path under the pool
 		run(fmt.Sprintf("fuser -km %s 2>/dev/null || true", mountPoint))
-		// Unmount all submounts (overlay, bind, etc.)
+
+		// Unmount all non-ZFS submounts (overlay, bind, NFS, etc.) — children first
 		mountsOut, _ := run(fmt.Sprintf("findmnt -rn -o TARGET %s 2>/dev/null", mountPoint))
-		// Reverse order to unmount children first
 		mounts := strings.Split(strings.TrimSpace(mountsOut), "\n")
 		for i := len(mounts) - 1; i >= 0; i-- {
 			m := strings.TrimSpace(mounts[i])
 			if m != "" && m != mountPoint {
-				run(fmt.Sprintf("umount -l %s 2>/dev/null || true", m))
+				run(fmt.Sprintf("fuser -km %s 2>/dev/null || true", m))
+				run(fmt.Sprintf("umount -f -l %s 2>/dev/null || true", m))
 			}
 		}
 	}
 
-	// ── 3. Destroy the zpool ──
+	// ── 3. Force-unmount ALL ZFS datasets (children first, then root) ──
+	// zpool destroy -f fails if any dataset is busy. We unmount them
+	// explicitly with fuser + zfs unmount -f to clear any stuck handles.
+	datasetsOut, _ := run(fmt.Sprintf("zfs list -H -o name -r %s 2>/dev/null", zpoolName))
+	if datasetsOut != "" {
+		datasets := strings.Split(strings.TrimSpace(datasetsOut), "\n")
+		// Reverse: unmount deepest children first
+		for i := len(datasets) - 1; i >= 0; i-- {
+			ds := strings.TrimSpace(datasets[i])
+			if ds == "" {
+				continue
+			}
+			// Get mountpoint of this dataset
+			dsMountOut, _ := run(fmt.Sprintf("zfs get -H -o value mountpoint %s 2>/dev/null", ds))
+			dsMount := strings.TrimSpace(dsMountOut)
+			if dsMount != "" && dsMount != "-" && dsMount != "none" && dsMount != "legacy" {
+				run(fmt.Sprintf("fuser -km %s 2>/dev/null || true", dsMount))
+			}
+			run(fmt.Sprintf("zfs unmount -f %s 2>/dev/null || true", ds))
+		}
+	}
+	time.Sleep(1 * time.Second)
+
+	// ── 4. Destroy the zpool ──
 	out, ok := run(fmt.Sprintf("zpool destroy -f %s 2>&1", zpoolName))
 	if !ok {
 		// One more try after a short wait
@@ -235,12 +259,12 @@ func destroyPoolZfs(poolName string) map[string]interface{} {
 		}
 	}
 
-	// ── 4. Remove mount point directory ──
+	// ── 5. Remove mount point directory ──
 	if mountPoint != "" && strings.HasPrefix(mountPoint, nimbusPoolsDir) {
 		os.RemoveAll(mountPoint)
 	}
 
-	// ── 5. Remove from storage.json ──
+	// ── 6. Remove from storage.json ──
 	confPools = append(confPools[:poolIdx], confPools[poolIdx+1:]...)
 	conf["pools"] = confPools
 	if primary, _ := conf["primaryPool"].(string); primary == poolName {
@@ -255,7 +279,7 @@ func destroyPoolZfs(poolName string) map[string]interface{} {
 	}
 	saveStorageConfigFull(conf)
 
-	// ── 6. Rescan disks ──
+	// ── 7. Rescan disks ──
 	run("partprobe 2>/dev/null || true")
 	rescanSCSIBuses()
 
