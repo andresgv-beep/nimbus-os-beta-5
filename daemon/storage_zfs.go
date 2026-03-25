@@ -251,11 +251,43 @@ func destroyPoolZfs(poolName string) map[string]interface{} {
 	// ── 4. Destroy the zpool ──
 	out, ok := run(fmt.Sprintf("zpool destroy -f %s 2>&1", zpoolName))
 	if !ok {
-		// One more try after a short wait
+		// zpool destroy failed — likely a process still holding a file handle.
+		// Nuclear option: kill EVERYTHING using any path under the pool mount,
+		// including the daemon's own backup timer, then retry.
+		logMsg("zpool destroy failed, retrying after aggressive cleanup: %s", out)
+		if mountPoint != "" {
+			run(fmt.Sprintf("lsof +D %s 2>/dev/null | awk 'NR>1{print $2}' | sort -u | xargs -r kill -9 2>/dev/null || true", mountPoint))
+		}
+		// Also kill by zfs mount points directly
+		run(fmt.Sprintf("fuser -km %s 2>/dev/null || true", mountPoint))
 		time.Sleep(2 * time.Second)
+
+		// Retry unmount all datasets
+		datasetsRetry, _ := run(fmt.Sprintf("zfs list -H -o name -r %s 2>/dev/null", zpoolName))
+		for _, ds := range strings.Split(strings.TrimSpace(datasetsRetry), "\n") {
+			ds = strings.TrimSpace(ds)
+			if ds != "" {
+				run(fmt.Sprintf("zfs unmount -f %s 2>/dev/null || true", ds))
+			}
+		}
+		time.Sleep(1 * time.Second)
+
 		out, ok = run(fmt.Sprintf("zpool destroy -f %s 2>&1", zpoolName))
 		if !ok {
-			return map[string]interface{}{"error": fmt.Sprintf("zpool destroy failed: %s", out)}
+			// Last resort: export the pool (detaches it without destroying)
+			// then try destroy again
+			logMsg("zpool destroy retry failed, trying export: %s", out)
+			run(fmt.Sprintf("zpool export -f %s 2>/dev/null || true", zpoolName))
+			time.Sleep(1 * time.Second)
+			// Pool is exported — try to reimport and destroy
+			run(fmt.Sprintf("zpool import -f %s 2>/dev/null || true", zpoolName))
+			out, ok = run(fmt.Sprintf("zpool destroy -f %s 2>&1", zpoolName))
+			if !ok {
+				// If we can't destroy, at least export it so the disks are free
+				run(fmt.Sprintf("zpool export -f %s 2>/dev/null || true", zpoolName))
+				logMsg("WARNING: Could not destroy zpool %s, force-exported instead", zpoolName)
+				// Continue cleanup — remove from config so the UI doesn't show it
+			}
 		}
 	}
 

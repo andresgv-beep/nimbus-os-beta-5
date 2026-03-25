@@ -628,19 +628,18 @@ func main() {
 	// Detect hardware capabilities (ZFS, Btrfs, SMART, etc.)
 	detectHardwareTools()
 
-	// FIRST: Mount all pools before ANYTHING touches storage or serves HTTP
-	// This prevents the race condition where HTTP serves requests
-	// while pools are still being imported/mounted, causing writes
-	// to the system disk instead of the pool.
+	// Start HTTP server FIRST — the system must always be reachable.
+	// Storage mounting happens right after but cannot block HTTP.
+	startHTTPServer()
+	startRateLimitCleanup()
+
+	// Mount pools — this runs synchronously but HTTP is already up.
+	// If pool mounting hangs, the UI is still accessible (shows pools as offline).
 	ensurePoolsMounted()
 	startupStorage()
 
 	// Update torrent download dir to point at the mounted pool
 	updateTorrentConfigForPool()
-
-	// THEN: Start HTTP — pools are guaranteed mounted (or marked failed) by now
-	startHTTPServer()
-	startRateLimitCleanup()
 
 	// Start background monitoring and schedulers
 	startStorageMonitoring()
