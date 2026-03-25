@@ -131,6 +131,14 @@ func sharesCreateHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	mountPoint, _ := targetPool["mountPoint"].(string)
+
+	// Verify the pool is actually mounted — not just a directory on the system disk.
+	// Without this, creating a share when the pool isn't mounted writes to the root filesystem.
+	if !isPathOnMountedPool(mountPoint) {
+		jsonError(w, 503, "Storage pool is not mounted. Check Storage Manager for pool status.")
+		return
+	}
+
 	folderPath := filepath.Join(mountPoint, "shares", safeName)
 	volumeName, _ := targetPool["name"].(string)
 

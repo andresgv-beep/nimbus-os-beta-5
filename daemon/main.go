@@ -112,6 +112,14 @@ func checkPoolPath(poolPath string) error {
 	if _, err := os.Stat(poolPath); os.IsNotExist(err) {
 		return fmt.Errorf("poolPath does not exist: %s", poolPath)
 	}
+	// Verify the pool is actually mounted on a real device,
+	// not just a directory on the system disk.
+	// Without this check, os.MkdirAll during failed mounts creates
+	// directories on the root filesystem that pass os.Stat but
+	// cause all data to be written to the system disk.
+	if !isPathOnMountedPool(poolPath) {
+		return fmt.Errorf("pool not mounted at %s — refusing operation to protect system disk", poolPath)
+	}
 	return nil
 }
 
@@ -617,16 +625,24 @@ func main() {
 	// Migrate from JSON files (first run only)
 	migrateFromJSON()
 
-	// Start HTTP API server
+	// Detect hardware capabilities (ZFS, Btrfs, SMART, etc.)
 	detectHardwareTools()
+
+	// FIRST: Mount all pools before ANYTHING touches storage or serves HTTP
+	// This prevents the race condition where HTTP serves requests
+	// while pools are still being imported/mounted, causing writes
+	// to the system disk instead of the pool.
+	ensurePoolsMounted()
+	startupStorage()
+
+	// Update torrent download dir to point at the mounted pool
+	updateTorrentConfigForPool()
+
+	// THEN: Start HTTP — pools are guaranteed mounted (or marked failed) by now
 	startHTTPServer()
 	startRateLimitCleanup()
 
-	// FIRST: Mount all pools before anything else touches storage
-	ensurePoolsMounted()  // Replaces zfsAutoImportOnStartup + btrfsAutoMountOnStartup
-	startupStorage()
-
-	// THEN: Start monitoring (cleanOrphanMountPoints runs here, AFTER pools are mounted)
+	// Start background monitoring and schedulers
 	startStorageMonitoring()
 	startZfsScheduler()
 

@@ -45,7 +45,21 @@ func saveStorageConfigFull(config map[string]interface{}) {
 func hasPoolGo() bool {
 	conf := getStorageConfigFull()
 	pools, _ := conf["pools"].([]interface{})
-	return len(pools) > 0
+	if len(pools) == 0 {
+		return false
+	}
+	// At least one pool must be actually mounted — not just in storage.json.
+	// Without this, the frontend shows "pool available" when the pool
+	// failed to mount, leading users to create shares on the system disk.
+	for _, poolRaw := range pools {
+		pm, _ := poolRaw.(map[string]interface{})
+		if mp, _ := pm["mountPoint"].(string); mp != "" {
+			if isMountedCheck(mp) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // ═══════════════════════════════════
@@ -1040,7 +1054,20 @@ func handleStorageRoutes(w http.ResponseWriter, r *http.Request) {
 		case "/api/storage/disks":
 			jsonOk(w, detectStorageDisksGo())
 		case "/api/storage/status":
-			jsonOk(w, map[string]interface{}{"pools": getStoragePoolsGo(), "alerts": storageAlertsGo, "hasPool": hasPoolGo()})
+			pools := getStoragePoolsGo()
+			mountedCount := 0
+			for _, p := range pools {
+				if s, _ := p["status"].(string); s == "active" || s == "degraded" {
+					mountedCount++
+				}
+			}
+			jsonOk(w, map[string]interface{}{
+				"pools":        pools,
+				"alerts":       storageAlertsGo,
+				"hasPool":      hasPoolGo(),
+				"mountedPools": mountedCount,
+				"totalPools":   len(pools),
+			})
 		case "/api/storage/alerts":
 			jsonOk(w, map[string]interface{}{"alerts": storageAlertsGo})
 		case "/api/storage/capabilities":

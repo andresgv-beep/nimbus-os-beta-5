@@ -186,7 +186,7 @@ func handleTorrentUploadGo(w http.ResponseWriter, r *http.Request) {
 
 	savePath := r.FormValue("save_path")
 	if savePath == "" {
-		savePath = "/data/torrents"
+		savePath = getTorrentDownloadDir()
 	}
 
 	file, header, err := r.FormFile("torrent")
@@ -236,5 +236,67 @@ func handleTorrentUploadGo(w http.ResponseWriter, r *http.Request) {
 		w.Write(respBody)
 	} else {
 		w.Write([]byte(`{"ok":true}`))
+	}
+}
+
+// getTorrentDownloadDir resolves the torrent download directory
+// from the primary pool. Falls back to /data/torrents if no pool is mounted.
+func getTorrentDownloadDir() string {
+	conf := getStorageConfigGo()
+	if conf == nil || len(conf.Pools) == 0 {
+		return "/data/torrents"
+	}
+	// Find primary pool
+	for _, p := range conf.Pools {
+		name, _ := p["name"].(string)
+		mp, _ := p["mountPoint"].(string)
+		if name == conf.PrimaryPool && mp != "" && isPathOnMountedPool(mp) {
+			torrentDir := filepath.Join(mp, "shares", "torrents")
+			os.MkdirAll(torrentDir, 0755)
+			return torrentDir
+		}
+	}
+	// Fallback: first mounted pool
+	for _, p := range conf.Pools {
+		mp, _ := p["mountPoint"].(string)
+		if mp != "" && isPathOnMountedPool(mp) {
+			torrentDir := filepath.Join(mp, "shares", "torrents")
+			os.MkdirAll(torrentDir, 0755)
+			return torrentDir
+		}
+	}
+	return "/data/torrents"
+}
+
+// updateTorrentConfigForPool updates torrent.conf to point download_dir
+// at the primary pool. Called after pools are mounted successfully.
+func updateTorrentConfigForPool() {
+	downloadDir := getTorrentDownloadDir()
+	if downloadDir == "/data/torrents" {
+		return // no pool mounted, leave default
+	}
+
+	confPath := "/etc/nimos/torrent.conf"
+	data, err := os.ReadFile(confPath)
+	if err != nil {
+		return
+	}
+
+	lines := strings.Split(string(data), "\n")
+	changed := false
+	for i, line := range lines {
+		if strings.HasPrefix(line, "download_dir=") {
+			current := strings.TrimPrefix(line, "download_dir=")
+			if current != downloadDir {
+				lines[i] = "download_dir=" + downloadDir
+				changed = true
+			}
+		}
+	}
+
+	if changed {
+		os.WriteFile(confPath, []byte(strings.Join(lines, "\n")), 0644)
+		run("systemctl restart nimos-torrentd 2>/dev/null || true")
+		logMsg("Updated torrent download dir to %s", downloadDir)
 	}
 }

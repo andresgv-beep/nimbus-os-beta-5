@@ -70,6 +70,15 @@ func ensurePoolsMounted() {
 			repairFstabIfNeeded(pm, mountPoint, poolType)
 		} else {
 			logMsg("ERROR: Pool '%s' could not be mounted at %s", poolName, mountPoint)
+			// Clean up the empty directory we created for mounting.
+			// If left behind, it sits on the system disk and tricks
+			// os.Stat checks into thinking the pool path exists,
+			// causing writes to go to the root filesystem.
+			entries, _ := os.ReadDir(mountPoint)
+			if len(entries) == 0 && !isMountedCheck(mountPoint) {
+				os.Remove(mountPoint)
+				logMsg("Removed empty mount point %s (mount failed, protecting system disk)", mountPoint)
+			}
 		}
 	}
 
